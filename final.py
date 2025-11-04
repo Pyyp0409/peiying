@@ -1856,6 +1856,118 @@ def show_front_desk_portal():
     with tab5:
         show_task_assignment()
 
+def show_request_queue():
+    st.markdown('<div class="sub-header">📋 Request Queue</div>', unsafe_allow_html=True)
+
+    if "service_requests" not in st.session_state:
+        st.session_state.service_requests = []
+
+    pending_requests = [
+        req for req in st.session_state.service_requests if req["status"] == "Pending"
+    ]
+
+    if not pending_requests:
+        st.info("No pending service requests at the moment.")
+        return
+
+    for req in pending_requests[::-1]:
+        status_color = (
+            "success-card" if req["status"] == "Completed" else "warning-card"
+        )
+
+        st.markdown(f"""
+        <div class="card {status_color}">
+            <h4>Request #{req['id']}</h4>
+            <p><strong>Guest:</strong> {req['guest']}</p>
+            <p><strong>Room:</strong> {req['room']}</p>
+            <p><strong>Request Type:</strong> {req['type']}</p>
+            <p><strong>Urgency:</strong> {req['urgency']}</p>
+            <p><strong>Details:</strong> {req['details']}</p>
+            <p><strong>Status:</strong> {req['status']}</p>
+            <p><strong>Requested On:</strong> {req['timestamp']}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if req["status"] != "Completed":
+            if st.button(f"✅ Mark Request {req['id']} as Completed", key=f"complete_req_{req['id']}"):
+                req["status"] = "Completed"
+                add_notification(f"Request {req['id']} marked as completed.", "service_request_update")
+                st.success(f"Request {req['id']} has been completed!")
+                st.rerun()
+
+def show_task_assignment():
+    st.markdown('<div class="sub-header">🧾 Task Assignment</div>', unsafe_allow_html=True)
+
+    if "tasks" not in st.session_state:
+        st.session_state.tasks = []
+
+    # Select which role/department to assign tasks to
+    staff_roles = [
+        "Housekeeping Staff",
+        "Maintenance Staff",
+        "Catering Staff",
+        "Event & Concierge Staff"
+    ]
+    selected_role = st.selectbox("Select Department / Role to Assign Task", staff_roles)
+
+    task_title = st.text_input("Task Title")
+    task_description = st.text_area("Task Description")
+    priority = st.select_slider("Priority Level", ["Low", "Medium", "High", "Critical"])
+    due_date = st.date_input("Due Date")
+
+    if st.button("📝 Assign Task", use_container_width=True):
+        if not task_title or not task_description:
+            st.error("Please fill in all required fields before assigning a task.")
+        else:
+            task_id = f"TSK{len(st.session_state.tasks) + 1:03d}"
+            task = {
+                "id": task_id,
+                "title": task_title,
+                "description": task_description,
+                "role": selected_role,
+                "priority": priority,
+                "due_date": due_date.strftime("%Y-%m-%d"),
+                "status": "Pending",
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+
+            st.session_state.tasks.append(task)
+            add_notification(
+                f"New task assigned to {selected_role}: {task_title}",
+                "task_assignment",
+                [selected_role]
+            )
+            st.success(f"✅ Task '{task_title}' assigned successfully to {selected_role}!")
+            st.rerun()
+
+    # Display all current tasks
+    if st.session_state.tasks:
+        st.markdown("### Current Tasks")
+        for task in st.session_state.tasks[::-1]:
+            status_color = (
+                "success-card" if task["status"] == "Completed"
+                else "warning-card" if task["priority"] in ["High", "Critical"]
+                else "card"
+            )
+
+            st.markdown(f"""
+            <div class="card {status_color}">
+                <h4>{task['title']} (#{task['id']})</h4>
+                <p><strong>Assigned Role:</strong> {task['role']}</p>
+                <p><strong>Priority:</strong> {task['priority']}</p>
+                <p><strong>Due Date:</strong> {task['due_date']}</p>
+                <p><strong>Status:</strong> {task['status']}</p>
+                <p><strong>Description:</strong> {task['description']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            if task["status"] != "Completed":
+                if st.button(f"✅ Mark Task {task['id']} as Completed", key=f"complete_task_{task['id']}"):
+                    task["status"] = "Completed"
+                    add_notification(f"Task {task['id']} marked as completed.", "task_update", [task["role"]])
+                    st.success(f"Task {task['id']} marked as completed!")
+                    st.rerun()
+            
 def show_front_desk_dashboard():
     st.markdown('<div class="sub-header">📊 Operations Overview</div>', unsafe_allow_html=True)
     
@@ -2233,7 +2345,199 @@ def show_manager_reports():
             mime="text/csv",
         )
         st.success("Report generated successfully!")
+        
+def show_housekeeping_portal():
+    st.markdown('<div class="main-header">🧹 Housekeeping Portal</div>', unsafe_allow_html=True)
+    
+    tab1, tab2 = st.tabs(["📋 Assigned Tasks", "✅ Task Completion"])
+    
+    with tab1:
+        st.markdown('<div class="sub-header">🛏️ Cleaning Schedule</div>', unsafe_allow_html=True)
+        
+        housekeeping_tasks = [t for t in st.session_state.tasks if t["assigned_to"] == "Housekeeping" and t["status"] in ["Pending", "In Progress"]]
+        
+        if not housekeeping_tasks:
+            st.info("No tasks assigned.")
+            return
+        
+        for task in housekeeping_tasks:
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                status_color = "warning-card" if task["status"] == "Pending" else "card"
+                st.markdown(f"""
+                <div class="card {status_color}">
+                    <h4>{task['type']} - Room {task['room']}</h4>
+                    <p>{task['description']}</p>
+                    <p>Assigned: {task['timestamp']}</p>
+                    <p>Status: <strong>{task['status']}</strong></p>
+                </div>
+                """, unsafe_allow_html=True)
+            with col2:
+                if task["status"] == "Pending":
+                    if st.button("Start", key=f"start_{task['id']}"):
+                        task["status"] = "In Progress"
+                        st.rerun()
+            with col3:
+                if task["status"] in ["Pending", "In Progress"]:
+                    if st.button("Complete", key=f"complete_{task['id']}"):
+                        task["status"] = "Completed"
+                        # Update room status if it's a cleaning task
+                        if task["type"] == "Cleaning":
+                            for room in st.session_state.rooms:
+                                if room["number"] == task["room"]:
+                                    room["status"] = "vacant"
+                                    break
+                        add_notification(f"Housekeeping task {task['id']} completed for Room {task['room']}", "task")
+                        st.rerun()
 
+# ==================== MAINTENANCE PORTAL ====================
+def show_maintenance_portal():
+    st.markdown('<div class="main-header">🔧 Maintenance Portal</div>', unsafe_allow_html=True)
+    
+    maintenance_requests = [r for r in st.session_state.service_requests if r["type"] == "Maintenance" and r["status"] in ["Pending", "In Progress"]]
+    
+    if not maintenance_requests:
+        st.info("No maintenance requests.")
+        return
+    
+    for request in maintenance_requests:
+        col1, col2, col3 = st.columns([3, 1, 1])
+        with col1:
+            # FIXED: Complete urgency mapping including "Critical"
+            urgency_color = {
+                "Critical": "critical-card", 
+                "High": "critical-card", 
+                "Medium": "warning-card", 
+                "Low": "card"
+            }.get(request["urgency"], "card")
+            
+            status_color = "warning-card" if request["status"] == "Pending" else "card"
+            
+            st.markdown(f"""
+            <div class="card {urgency_color} {status_color}">
+                <h4>Maintenance - Room {request['room']}</h4>
+                <p>Issue: {request['details']}</p>
+                <p>Guest: {request['guest']}</p>
+                <p>Urgency: {request['urgency']}</p>
+                <p>Status: <strong>{request['status']}</strong></p>
+            </div>
+            """, unsafe_allow_html=True)
+        with col2:
+            if request["status"] == "Pending":
+                if st.button("Start Work", key=f"start_{request['id']}"):
+                    request["status"] = "In Progress"
+                    st.rerun()
+        with col3:
+            if request["status"] in ["Pending", "In Progress"]:
+                if st.button("Complete", key=f"complete_{request['id']}"):
+                    request["status"] = "Completed"
+                    add_notification(f"Maintenance completed for Room {request['room']}", "maintenance")
+                    st.rerun()
+
+# ==================== CATERING PORTAL ====================
+def show_catering_portal():
+    st.markdown('<div class="main-header">🍽️ Catering Services Portal</div>', unsafe_allow_html=True)
+    
+    tab1, tab2 = st.tabs(["📋 Assigned Tasks", "📊 Kitchen Operations"])
+    
+    with tab1:
+        st.markdown('<div class="sub-header">🍳 Catering Tasks</div>', unsafe_allow_html=True)
+        
+        catering_tasks = [t for t in st.session_state.tasks if t["assigned_to"] == "Catering" and t["status"] in ["Pending", "In Progress"]]
+        
+        if not catering_tasks:
+            st.info("No catering tasks assigned.")
+            return
+        
+        for task in catering_tasks:
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                status_color = "warning-card" if task["status"] == "Pending" else "card" if task["status"] == "In Progress" else "success-card"
+                st.markdown(f"""
+                <div class="card {status_color}">
+                    <h4>{task['type']} - Booking #{task.get('booking_id', 'N/A')}</h4>
+                    <p>{task['description']}</p>
+                    <p>Assigned: {task['timestamp']}</p>
+                    <p>Status: <strong>{task['status']}</strong></p>
+                </div>
+                """, unsafe_allow_html=True)
+            with col2:
+                if task["status"] == "Pending":
+                    if st.button("Start", key=f"start_{task['id']}"):
+                        task["status"] = "In Progress"
+                        st.rerun()
+            with col3:
+                if task["status"] in ["Pending", "In Progress"]:
+                    if st.button("Complete", key=f"complete_{task['id']}"):
+                        task["status"] = "Completed"
+                        add_notification(f"Catering task {task['id']} completed", "task")
+                        st.rerun()
+    
+    with tab2:
+        st.markdown("#### Kitchen Performance")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Today's Orders", "18")
+        with col2:
+            st.metric("Preparation Time", "22 min")
+        with col3:
+            st.metric("Guest Satisfaction", "4.7/5")
+
+# ==================== EVENT & CONCIERGE PORTAL ====================
+def show_event_concierge_portal():
+    st.markdown('<div class="main-header">🎉 Event & Concierge Portal</div>', unsafe_allow_html=True)
+    
+    tab1, tab2 = st.tabs(["📋 Assigned Tasks", "📅 Event Calendar"])
+    
+    with tab1:
+        st.markdown('<div class="sub-header">🎊 Event & Concierge Tasks</div>', unsafe_allow_html=True)
+        
+        event_tasks = [t for t in st.session_state.tasks if t["assigned_to"] == "Event & Concierge" and t["status"] in ["Pending", "In Progress"]]
+        
+        if not event_tasks:
+            st.info("No event or concierge tasks assigned.")
+            return
+        
+        for task in event_tasks:
+            col1, col2, col3 = st.columns([3, 1, 1])
+            with col1:
+                status_color = "warning-card" if task["status"] == "Pending" else "card" if task["status"] == "In Progress" else "success-card"
+                st.markdown(f"""
+                <div class="card {status_color}">
+                    <h4>{task['type']} - Booking #{task.get('booking_id', 'N/A')}</h4>
+                    <p>{task['description']}</p>
+                    <p>Assigned: {task['timestamp']}</p>
+                    <p>Status: <strong>{task['status']}</strong></p>
+                </div>
+                """, unsafe_allow_html=True)
+            with col2:
+                if task["status"] == "Pending":
+                    if st.button("Start", key=f"start_{task['id']}"):
+                        task["status"] = "In Progress"
+                        st.rerun()
+            with col3:
+                if task["status"] in ["Pending", "In Progress"]:
+                    if st.button("Complete", key=f"complete_{task['id']}"):
+                        task["status"] = "Completed"
+                        add_notification(f"Event/Concierge task {task['id']} completed", "task")
+                        st.rerun()
+    
+    with tab2:
+        st.markdown("#### Upcoming Events")
+        events = [
+            {"name": "Corporate Conference", "date": "2024-02-15", "guests": 80, "status": "Confirmed"},
+            {"name": "Wedding Reception", "date": "2024-02-20", "guests": 120, "status": "Planning"},
+        ]
+        
+        for event in events:
+            st.markdown(f"""
+            <div class="card">
+                <h4>{event['name']}</h4>
+                <p>Date: {event['date']} | Guests: {event['guests']}</p>
+                <p>Status: {event['status']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+                    
 def show_system_config():
     st.markdown('<div class="sub-header">⚙️ System Configuration</div>', unsafe_allow_html=True)
     
@@ -2275,6 +2579,7 @@ def show_system_config():
         
         if st.button("💾 Save Configuration", use_container_width=True):
             st.success("System configuration saved successfully!")
+
 
 # Run the application
 if __name__ == "__main__":
