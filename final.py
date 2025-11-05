@@ -1896,77 +1896,101 @@ def show_request_queue():
                 st.rerun()
 
 def show_task_assignment():
-    st.markdown('<div class="sub-header">🧾 Task Assignment</div>', unsafe_allow_html=True)
-
-    if "tasks" not in st.session_state:
-        st.session_state.tasks = []
-
-    # Select which role/department to assign tasks to
-    staff_roles = [
-        "Housekeeping Staff",
-        "Maintenance Staff",
-        "Catering Staff",
-        "Event & Concierge Staff"
-    ]
-    selected_role = st.selectbox("Select Department / Role to Assign Task", staff_roles)
-
-    task_title = st.text_input("Task Title")
-    task_description = st.text_area("Task Description")
-    priority = st.select_slider("Priority Level", ["Low", "Medium", "High", "Critical"])
-    due_date = st.date_input("Due Date")
-
-    if st.button("📝 Assign Task", use_container_width=True):
-        if not task_title or not task_description:
-            st.error("Please fill in all required fields before assigning a task.")
-        else:
-            task_id = f"TSK{len(st.session_state.tasks) + 1:03d}"
-            task = {
-                "id": task_id,
-                "title": task_title,
-                "description": task_description,
-                "role": selected_role,
-                "priority": priority,
-                "due_date": due_date.strftime("%Y-%m-%d"),
-                "status": "Pending",
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-
-            st.session_state.tasks.append(task)
-            add_notification(
-                f"New task assigned to {selected_role}: {task_title}",
-                "task_assignment",
-                [selected_role]
-            )
-            st.success(f"✅ Task '{task_title}' assigned successfully to {selected_role}!")
-            st.rerun()
-
-    # Display all current tasks
-    if st.session_state.tasks:
-        st.markdown("### Current Tasks")
-        for task in st.session_state.tasks[::-1]:
-            status_color = (
-                "success-card" if task["status"] == "Completed"
-                else "warning-card" if task["priority"] in ["High", "Critical"]
-                else "card"
-            )
-
-            st.markdown(f"""
-            <div class="card {status_color}">
-                <h4>{task['title']} (#{task['id']})</h4>
-                <p><strong>Assigned Role:</strong> {task['role']}</p>
-                <p><strong>Priority:</strong> {task['priority']}</p>
-                <p><strong>Due Date:</strong> {task['due_date']}</p>
-                <p><strong>Status:</strong> {task['status']}</p>
-                <p><strong>Description:</strong> {task['description']}</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-            if task["status"] != "Completed":
-                if st.button(f"✅ Mark Task {task['id']} as Completed", key=f"complete_task_{task['id']}"):
-                    task["status"] = "Completed"
-                    add_notification(f"Task {task['id']} marked as completed.", "task_update", [task["role"]])
-                    st.success(f"Task {task['id']} marked as completed!")
-                    st.rerun()
+    st.markdown('<div class="sub-header">🎯 Manual Task Assignment</div>', unsafe_allow_html=True)
+    
+    # Show bookings with special requests
+    special_request_bookings = [b for b in st.session_state.bookings if b.get('special_requests')]
+    
+    if not special_request_bookings:
+        st.info("No bookings with special requests requiring manual assignment.")
+        return
+    
+    for booking in special_request_bookings:
+        st.markdown(f"""
+        <div class="card warning-card">
+            <h4>Booking #{booking['id']} - {booking['guest']}</h4>
+            <p><strong>Room Type:</strong> {booking['room_type']}</p>
+            <p><strong>Special Requests:</strong> {booking['special_requests']}</p>
+            <p><strong>Check-in:</strong> {booking['check_in']} | <strong>Check-out:</strong> {booking['check_out']}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Task assignment options including vendors
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            if st.button(f"🧹 Housekeeping", key=f"house_{booking['id']}"):
+                task_id = f"TK{len(st.session_state.tasks) + 1:03d}"
+                new_task = {
+                    "id": task_id,
+                    "type": "Special Housekeeping",
+                    "room": "TBD",
+                    "assigned_to": "Housekeeping",
+                    "status": "Pending",
+                    "description": f"Special request: {booking['special_requests']} for {booking['guest']}",
+                    "booking_id": booking['id'],
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                st.session_state.tasks.append(new_task)
+                add_notification(f"New housekeeping task assigned: {task_id}", "task", ["Housekeeping Staff"])
+                st.success(f"Task assigned to Housekeeping team!")
+                st.rerun()
+        
+        with col2:
+            if st.button(f"🔧 Maintenance", key=f"maint_{booking['id']}"):
+                task_id = f"TK{len(st.session_state.tasks) + 1:03d}"
+                new_task = {
+                    "id": task_id,
+                    "type": "Special Maintenance",
+                    "room": "TBD",
+                    "assigned_to": "Maintenance",
+                    "status": "Pending",
+                    "description": f"Special request: {booking['special_requests']} for {booking['guest']}",
+                    "booking_id": booking['id'],
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                st.session_state.tasks.append(new_task)
+                add_notification(f"New maintenance task assigned: {task_id}", "task", ["Maintenance Staff"])
+                st.success(f"Task assigned to Maintenance team!")
+                st.rerun()
+        
+        with col3:
+            if st.button(f"🍽️ Catering", key=f"cater_{booking['id']}"):
+                task_id = f"TK{len(st.session_state.tasks) + 1:03d}"
+                new_task = {
+                    "id": task_id,
+                    "type": "Catering Service",
+                    "room": "TBD",
+                    "assigned_to": "Catering",
+                    "status": "Pending",
+                    "description": f"Special request: {booking['special_requests']} for {booking['guest']}",
+                    "booking_id": booking['id'],
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                st.session_state.tasks.append(new_task)
+                add_notification(f"New catering task assigned: {task_id}", "task", ["Catering Staff"])
+                st.success(f"Task assigned to Catering team!")
+                st.rerun()
+        
+        with col4:
+            if st.button(f"🎉 Event/Concierge", key=f"event_{booking['id']}"):
+                task_id = f"TK{len(st.session_state.tasks) + 1:03d}"
+                new_task = {
+                    "id": task_id,
+                    "type": "Event/Concierge Service",
+                    "room": "TBD",
+                    "assigned_to": "Event & Concierge",
+                    "status": "Pending",
+                    "description": f"Special request: {booking['special_requests']} for {booking['guest']}",
+                    "booking_id": booking['id'],
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                st.session_state.tasks.append(new_task)
+                add_notification(f"New event/concierge task assigned: {task_id}", "task", ["Event & Concierge Staff"])
+                st.success(f"Task assigned to Event & Concierge team!")
+                st.rerun()
+        
+        st.markdown("---")
             
 def show_front_desk_dashboard():
     st.markdown('<div class="sub-header">📊 Operations Overview</div>', unsafe_allow_html=True)
