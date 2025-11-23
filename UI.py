@@ -1015,10 +1015,8 @@ def show_guest_registration():
             full_name = st.text_input("Full Name *")
             email = st.text_input("Email Address *")
             phone = st.text_input("Phone Number *")
-            id_type = st.selectbox("ID Type *", ["Passport", "Driver's License", "National ID"])
         
         with col2:
-            id_number = st.text_input("ID Number *")
             address = st.text_area("Home Address *")
             emergency_contact = st.text_input("Emergency Contact")
             preferred_payment = st.selectbox("Preferred Payment Method", ["Credit Card", "Debit Card", "Online Banking", "E-Wallet", "Cash"])
@@ -1039,7 +1037,7 @@ def show_guest_registration():
         
         if submitted:
             # Validation
-            if not all([full_name, email, phone, id_type, id_number, address, password, confirm_password]):
+            if not all([full_name, email, phone, address, password, confirm_password]):
                 st.error("Please fill in all required fields (*)")
             elif password != confirm_password:
                 st.error("Passwords do not match!")
@@ -1061,8 +1059,6 @@ def show_guest_registration():
                         "status": "Active",
                         "registration_date": datetime.now().strftime("%Y-%m-%d"),
                         "phone": phone,
-                        "id_type": id_type,
-                        "id_number": id_number,
                         "address": address,
                         "emergency_contact": emergency_contact,
                         "preferred_payment": preferred_payment,
