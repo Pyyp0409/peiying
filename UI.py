@@ -11,36 +11,59 @@ import requests
 
 
 def enforce_auto_cancels():
-    now = datetime.now()
-    for inv in st.session_state.invoices:
-        if inv["status"] == "Pending":
-            due = datetime.strptime(inv["due_date"], "%Y-%m-%d %H:%M:%S")
-            if now > due:
-                booking = next((b for b in st.session_state.bookings if b["id"] == inv["booking_id"]), None)
-                if booking:
-                    booking["status"] = "Cancelled"
-                    booking["cancellation_status"] = "Auto-cancelled"
-                    
-                    # Log cancellation request
-                    st.session_state.cancellation_requests.append({
-                        "booking_id": booking["id"],
-                        "guest": booking["guest"],
-                        "guest_email": booking["guest_email"],
-                        "amount": booking["amount"],
-                        "amount_paid": booking.get("amount_paid", 0),
-                        "status": "Processed",
-                        "request_date": now.strftime("%Y-%m-%d %H:%M:%S"),
-                        "refund_amount": 0,
-                        "processing_fee": 0
-                    })
+    """Auto-cancel unpaid bookings after 2 hours with error handling"""
+    try:
+        # Safety checks
+        if 'invoices' not in st.session_state:
+            st.session_state.invoices = []
+        if 'bookings' not in st.session_state:
+            st.session_state.bookings = []
+        if 'cancellation_requests' not in st.session_state:
+            st.session_state.cancellation_requests = []
+            
+        now = datetime.now()
+        invoices_to_process = st.session_state.invoices.copy()  # Work with copy to avoid modification during iteration
+        
+        for inv in invoices_to_process:
+            try:
+                if inv.get("status") == "Pending" and "due_date" in inv:
+                    due = datetime.strptime(inv["due_date"], "%Y-%m-%d %H:%M:%S")
+                    if now > due:
+                        # Find the corresponding booking
+                        booking = next((b for b in st.session_state.bookings if b.get("id") == inv.get("booking_id")), None)
+                        if booking:
+                            booking["status"] = "Cancelled"
+                            booking["cancellation_status"] = "Auto-cancelled"
+                            
+                            # Log cancellation request
+                            cancellation_request = {
+                                "booking_id": booking["id"],
+                                "guest": booking.get("guest", "Unknown"),
+                                "guest_email": booking.get("guest_email", ""),
+                                "amount": booking.get("amount", 0),
+                                "amount_paid": booking.get("amount_paid", 0),
+                                "status": "Processed",
+                                "request_date": now.strftime("%Y-%m-%d %H:%M:%S"),
+                                "refund_amount": 0,
+                                "processing_fee": 0
+                            }
+                            st.session_state.cancellation_requests.append(cancellation_request)
 
-                inv["status"] = "Cancelled"
-                add_notification(
-                    f"Booking {inv['booking_id']} auto-cancelled due to unpaid invoice",
-                    "cancellation",
-                    ["Hotel Manager", "Billing Officer"]
-                )
-
+                        inv["status"] = "Cancelled"
+                        add_notification(
+                            f"Booking {inv.get('booking_id', 'Unknown')} auto-cancelled due to unpaid invoice",
+                            "cancellation",
+                            ["Hotel Manager", "Billing Officer"]
+                        )
+            except Exception as e:
+                # Log the error but continue processing other invoices
+                print(f"Error processing invoice {inv.get('id', 'Unknown')}: {e}")
+                continue
+                
+    except Exception as e:
+        # Don't crash the app if auto-cancellation fails
+        print(f"Error in enforce_auto_cancels: {e}")
+        
 # Page configuration
 st.set_page_config(
     page_title="Grand Stay Hotel Management System",
@@ -57,7 +80,7 @@ st.markdown("""
         --light-blue: #A9D6E5;
         --platinum: #E2E2E2;
         --cerulean: #0F2143;
-        --dark-navy: #0A1A33;
+        --dark-navy: #09292c;
     }
     
     .stApp {
@@ -184,7 +207,7 @@ st.markdown("""
     }
     
     .elegant-cover {
-        background: linear-gradient(135deg, #143364 15%, #0A1A33 85%);
+        background: linear-gradient(135deg, #16656e 15%, #09292c 85%);
         padding: 4rem 2rem;
         border-radius: 20px;
         text-align: center;
@@ -315,14 +338,14 @@ DEMO_ACCOUNTS = {
 
 # Initialize session data
 def init_session_data():
-    # Initialize all session state variables
+    """Initialize session data with error handling - PRESERVE existing data"""
     defaults = {
         'authenticated': False,
         'current_user': None,
         'current_role': None,
         'modification_requests': [],
         'supabase': init_supabase(),
-        'system_logs':[],
+        'system_logs': [],
         'last_activity': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'bookings': [
             # Sample bookings with real data - UPDATED TO 2025
@@ -436,112 +459,101 @@ def init_session_data():
             {"id": "BK002", "guest": "Sarah Visitor", "guest_email": "guest2@demo.com", "room_type": "Suite", 
              "check_in": "2025-10-25", "check_out": "2025-10-30", "status": "Completed", "payment_status": "Paid", 
              "amount": 1750, "amount_paid": 1750, "room_number": "203", "timestamp": "2025-10-25 15:45:00"},
-        ]
+        ],
+        'meetings': [],
+        'create_special_request_for': None,
     }
     
-    for key, value in defaults.items():
+    # CRITICAL FIX: Initialize each key individually with proper preservation logic
+    for key, default_value in defaults.items():
         if key not in st.session_state:
-            st.session_state[key] = value
+            # Initialize if doesn't exist
+            st.session_state[key] = default_value
+        else:
+            # For critical data structures, NEVER overwrite if they already have data
+            if key in ['meetings', 'tasks', 'service_requests']:
+                # Only keep default if current state is completely empty
+                if not st.session_state[key]:
+                    st.session_state[key] = default_value
+                # Otherwise, preserve existing data - DO NOTHING
+            elif key in ['bookings', 'completed_bookings', 'rooms', 'invoices']:
+                # For other important data, only initialize if empty
+                if not st.session_state[key]:
+                    st.session_state[key] = default_value
+                # Otherwise, preserve existing data
+            else:
+                # For other data, preserve existing state
+                pass  # Keep existing data, don't overwrite
 
 def show_calendar(role="General"):
     st.markdown('<div class="sub-header">📅 Hotel Calendar</div>', unsafe_allow_html=True)
     
-    # Initialize meetings if not exists
+    # CRITICAL: Ensure meetings is always initialized and preserved
     if 'meetings' not in st.session_state:
         st.session_state.meetings = []
     
-    # Add demo meeting data for 2025
-    demo_meetings = [
-        {"title": "Corporate Conference", "date": "2025-10-15", "time": "09:00", "venue": "Grand Ballroom", "department": "Event & Concierge Staff", "remarks": "AV setup required", "guest": "Tech Corp", "room": "Conference Hall"},
-        {"title": "Wedding Reception", "date": "2025-10-20", "time": "18:00", "venue": "Garden Pavilion", "department": "Catering Staff", "remarks": "Vegetarian menu required", "guest": "Smith Wedding", "room": "Outdoor"},
-        {"title": "Board Meeting", "date": "2025-11-05", "time": "14:00", "venue": "Executive Room", "department": "Event & Concierge Staff", "remarks": "Projector and whiteboard", "guest": "ABC Company", "room": "Executive Room"},
-        {"title": "Product Launch", "date": "2025-11-15", "time": "10:00", "venue": "Main Hall", "department": "All Staff", "remarks": "Large event - all hands", "guest": "Innovate Inc", "room": "Main Hall"},
-        {"title": "Birthday Party", "date": "2025-10-25", "time": "16:00", "venue": "Poolside", "department": "Event & Concierge Staff", "remarks": "Decorations needed", "guest": "Johnson Family", "room": "Pool Area"},
-    ]
-    
-    # Add demo data if empty
+    # Only add demo data if meetings is COMPLETELY empty (no meetings at all)
     if not st.session_state.meetings:
+        demo_meetings = [
+            {"title": "Corporate Conference", "date": "2025-10-15", "time": "09:00", "venue": "Grand Ballroom", "department": "Event & Concierge Staff", "remarks": "AV setup required", "guest": "Tech Corp", "room": "Conference Hall", "status": "completed"},
+            {"title": "Wedding Reception", "date": "2025-10-20", "time": "18:00", "venue": "Garden Pavilion", "department": "Catering Staff", "remarks": "Vegetarian menu required", "guest": "Smith Wedding", "room": "Outdoor", "status": "completed"},
+            {"title": "Board Meeting", "date": "2025-11-05", "time": "14:00", "venue": "Executive Room", "department": "Event & Concierge Staff", "remarks": "Projector and whiteboard", "guest": "ABC Company", "room": "Executive Room", "status": "upcoming"},
+            {"title": "Product Launch", "date": "2025-11-15", "time": "10:00", "venue": "Main Hall", "department": "All Staff", "remarks": "Large event - all hands", "guest": "Innovate Inc", "room": "Main Hall", "status": "upcoming"},
+            {"title": "Birthday Party", "date": "2025-10-25", "time": "16:00", "venue": "Poolside", "department": "Event & Concierge Staff", "remarks": "Decorations needed", "guest": "Johnson Family", "room": "Pool Area", "status": "completed"},
+        ]
         st.session_state.meetings.extend(demo_meetings)
     
-    # Combine demo and actual meetings
+    # Use ALL meetings from session state - DON'T FILTER
     all_meetings = st.session_state.meetings
     
-    # For Event & Concierge, show specialized view
-    if role == "Event & Concierge Staff":
-        st.markdown("#### 🎊 Event & Concierge Schedule")
-        
-        # Filter only events for this department
-        department_meetings = [m for m in all_meetings if m["department"] in ["Event & Concierge Staff", "All Staff"]]
-        
-        # Upcoming events
-        st.markdown("##### Upcoming Events")
-        today = datetime.now().strftime("%Y-%m-%d")
-        upcoming_events = [m for m in department_meetings if m["date"] >= today]
-        
-        if upcoming_events:
-            for event in sorted(upcoming_events, key=lambda x: x['date'])[:5]:
-                st.markdown(f"""
-                <div class="card success-card">
-                    <h4>🎉 {event['title']}</h4>
-                    <p><strong>📅 Date:</strong> {event['date']} | <strong>⏰ Time:</strong> {event['time']}</p>
-                    <p><strong>📍 Venue:</strong> {event['venue']}</p>
-                    <p><strong>👤 Guest:</strong> {event['guest']}</p>
-                    <p><strong>📝 Remarks:</strong> {event['remarks']}</p>
-                </div>
-                """, unsafe_allow_html=True)
-        else:
-            st.info("No upcoming events scheduled.")
-        
-        # Event statistics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Events", len(department_meetings))
-        with col2:
-            st.metric("Upcoming Events", len(upcoming_events))
-        with col3:
-            completed_events = len([m for m in department_meetings if m["date"] < today])
-            st.metric("Completed Events", completed_events)
+    # Display all meetings (both upcoming and completed)
+    if not all_meetings:
+        st.info("No meetings or events scheduled.")
+        return
     
-    else:
-        # General calendar view for other staff
-        col1, col2 = st.columns([2, 1])
-        
-        with col1:
-            selected_month = st.selectbox("Select Month", 
-                                        ["October 2025", "November 2025", "December 2025"])
-            
-            # Filter meetings for selected month
-            month_map = {"October 2025": "2025-10", "November 2025": "2025-11", "December 2025": "2025-12"}
-            selected_month_prefix = month_map[selected_month]
-            month_meetings = [m for m in all_meetings if m["date"].startswith(selected_month_prefix)]
-            
-            if month_meetings:
-                for meeting in month_meetings:
-                    st.markdown(f"""
-                    <div class="card">
-                        <h4>📅 {meeting['title']}</h4>
-                        <p><strong>Date:</strong> {meeting['date']} | <strong>Time:</strong> {meeting['time']}</p>
-                        <p><strong>Venue:</strong> {meeting['venue']} | <strong>Department:</strong> {meeting['department']}</p>
-                        <p><strong>Guest:</strong> {meeting['guest']} | <strong>Room:</strong> {meeting['room']}</p>
-                        <p><strong>Remarks:</strong> {meeting['remarks']}</p>
-                    </div>
-                    """, unsafe_allow_html=True)
-            else:
-                st.info("No meetings scheduled for this month.")
-        
-        with col2:
-            st.markdown("#### Quick Stats")
-            st.metric("Total Meetings", len(all_meetings))
-            st.metric(f"Meetings in {selected_month}", len(month_meetings))
-            
-            # Department filter
-            departments = list(set(m["department"] for m in all_meetings))
-            selected_dept = st.selectbox("Filter by Department", ["All"] + departments)
-            if selected_dept != "All":
-                dept_meetings = [m for m in all_meetings if m["department"] == selected_dept]
-                st.metric(f"{selected_dept} Meetings", len(dept_meetings))
-
+    # Filter options
+    col1, col2 = st.columns(2)
+    with col1:
+        show_completed = st.checkbox("Show Completed Events", value=True)
+    with col2:
+        department_filter = st.selectbox("Filter by Department", ["All"] + list(set(m.get('department', '') for m in all_meetings)))
     
+    # Filter meetings based on selections
+    filtered_meetings = all_meetings
+    if not show_completed:
+        filtered_meetings = [m for m in filtered_meetings if m.get('status') != 'completed']
+    if department_filter != "All":
+        filtered_meetings = [m for m in filtered_meetings if m.get('department') == department_filter]
+    
+    # Display meetings in a nice format
+    for meeting in filtered_meetings:
+        status_color = "success-card" if meeting.get("status") == "completed" else "card"
+        
+        st.markdown(f"""
+        <div class="card {status_color}">
+            <h4>📅 {meeting['title']}</h4>
+            <p><strong>Date:</strong> {meeting['date']} at {meeting['time']}</p>
+            <p><strong>Venue:</strong> {meeting['venue']}</p>
+            <p><strong>Department:</strong> {meeting['department']}</p>
+            <p><strong>Guest:</strong> {meeting['guest']}</p>
+            <p><strong>Remarks:</strong> {meeting['remarks']}</p>
+            <p><strong>Status:</strong> {meeting.get('status', 'upcoming').title()}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Statistics
+    total_meetings = len(all_meetings)
+    completed_meetings = len([m for m in all_meetings if m.get('status') == 'completed'])
+    upcoming_meetings = total_meetings - completed_meetings
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Events", total_meetings)
+    with col2:
+        st.metric("Upcoming Events", upcoming_meetings)
+    with col3:
+        st.metric("Completed Events", completed_meetings)
+        
 def check_session_timeout():
     """Check if session has timed out (30 minutes)"""
     if st.session_state.authenticated and 'last_activity' in st.session_state:
@@ -682,43 +694,66 @@ def show_system_logs():
     # Clear logs button
     if st.button("🗑️ Clear All Logs", type="secondary"):
         st.session_state.system_logs = []
-        st.rerun()
+        st.success("System logs cleared!")
 
 def show_past_work(role="General"):
     st.markdown(f'<div class="sub-header">📋 Completed Tasks - {role}</div>', unsafe_allow_html=True)
     
-    # Get completed tasks for this role
+    # Get ALL completed tasks for this role - FIXED FILTERING
+    completed_items = []
+    
+    # Map roles to their short names used in task assignment
+    role_mapping = {
+        "Housekeeping Staff": "Housekeeping",
+        "Maintenance Staff": "Maintenance", 
+        "Catering Staff": "Catering",
+        "Event & Concierge Staff": "Event & Concierge"
+    }
+    
+    short_role = role_mapping.get(role, role)
+    
     if role == "Maintenance Staff":
-        completed_items = [r for r in st.session_state.service_requests if r["type"] == "Maintenance" and r["status"] == "Completed"]
+        # For maintenance, check BOTH service_requests AND tasks
+        completed_service_requests = [r for r in st.session_state.service_requests if r.get("type") == "Maintenance" and r.get("status") == "Completed"]
+        completed_tasks = [t for t in st.session_state.tasks if t.get("assigned_to") == "Maintenance" and t.get("status") == "Completed"]
+        completed_items = completed_service_requests + completed_tasks
     else:
-        completed_items = [t for t in st.session_state.tasks if t["assigned_to"] == role and t["status"] == "Completed"]
+        # For other roles, use tasks with proper role mapping
+        completed_items = [t for t in st.session_state.tasks if t.get("assigned_to") == short_role and t.get("status") == "Completed"]
+    
+    # DEBUG: Show what we found
+    if st.session_state.get('debug_mode', False):
+        st.write(f"Completed items found for {role} (short: {short_role}): {len(completed_items)}")
+        st.write("Completed items:", completed_items)
     
     if not completed_items:
         st.info("No completed work found.")
         return
     
-    # Display completed work
-    for item in completed_items[::-1]:  # Show latest first
-        if role == "Maintenance Staff":
-            # For maintenance, use service requests
+    # Display ALL completed work in reverse chronological order (newest first)
+    for item in completed_items[::-1]:
+        if 'details' in item:  # It's from service_requests
             st.markdown(f"""
             <div class="card success-card">
-                <h4>🔧 Maintenance - Room {item['room']}</h4>
-                <p><strong>Issue:</strong> {item['details']}</p>
-                <p><strong>Guest:</strong> {item['guest']}</p>
-                <p><strong>Urgency:</strong> {item['urgency']}</p>
+                <h4>🔧 Maintenance - Room {item.get('room', 'N/A')}</h4>
+                <p><strong>Issue:</strong> {item.get('details', 'No details')}</p>
+                <p><strong>Guest:</strong> {item.get('guest', 'N/A')}</p>
+                <p><strong>Urgency:</strong> {item.get('urgency', 'N/A')}</p>
                 <p><strong>Completed On:</strong> {item.get('completed_at', 'N/A')}</p>
+                <p><strong>Completed By:</strong> {item.get('completed_by', 'N/A')}</p>
+                <p><strong>Request ID:</strong> {item.get('id', 'N/A')}</p>
             </div>
             """, unsafe_allow_html=True)
-        else:
-            # For other roles, use tasks
+        else:  # It's from tasks
             st.markdown(f"""
             <div class="card success-card">
-                <h4>{item['type']} - {item.get('room', 'N/A')}</h4>
-                <p><strong>Description:</strong> {item['description']}</p>
-                <p><strong>Assigned:</strong> {item['timestamp']}</p>
+                <h4>{item.get('type', 'Task')} - {item.get('room', 'N/A')}</h4>
+                <p><strong>Description:</strong> {item.get('description', 'No description')}</p>
+                <p><strong>Guest:</strong> {item.get('guest', 'N/A')}</p>
+                <p><strong>Assigned:</strong> {item.get('timestamp', 'N/A')}</p>
                 <p><strong>Completed By:</strong> {item.get('completed_by', st.session_state.current_user['name'])}</p>
                 <p><strong>Completed At:</strong> {item.get('completed_at', 'N/A')}</p>
+                <p><strong>Task ID:</strong> {item.get('id', 'N/A')}</p>
             </div>
             """, unsafe_allow_html=True)
     
@@ -727,18 +762,19 @@ def show_past_work(role="General"):
     with col1:
         st.metric("Total Completed", len(completed_items))
     with col2:
-        # Calculate completion rate (for tasks only)
-        if role != "Maintenance Staff":
-            total_tasks = len([t for t in st.session_state.tasks if t["assigned_to"] == role])
-            if total_tasks > 0:
-                completion_rate = (len(completed_items) / total_tasks) * 100
-                st.metric("Completion Rate", f"{completion_rate:.1f}%")
-            else:
-                st.metric("Completion Rate", "0%")
+        # Calculate completion rate
+        if role == "Maintenance Staff":
+            total_maintenance_work = len([r for r in st.session_state.service_requests if r.get("type") == "Maintenance"]) + len([t for t in st.session_state.tasks if t.get("assigned_to") == "Maintenance"])
+        else:
+            total_maintenance_work = len([t for t in st.session_state.tasks if t.get("assigned_to") == short_role])
+        
+        if total_maintenance_work > 0:
+            completion_rate = (len(completed_items) / total_maintenance_work) * 100
+            st.metric("Completion Rate", f"{completion_rate:.1f}%")
+        else:
+            st.metric("Completion Rate", "0%")
     with col3:
-        # Recent activity
-        recent_count = len([item for item in completed_items if datetime.strptime(item.get('completed_at', datetime.now().strftime('%Y-%m-%d %H:%M:%S')), '%Y-%m-%d %H:%M:%S').date() == datetime.now().date()])
-        st.metric("Today's Completions", recent_count)
+        st.metric("All Time", len(completed_items))
 
 
 
@@ -790,100 +826,65 @@ def show_login_form():
                 # ADD LOG ENTRY:
                 log_activity(user['name'], "User Login", f"Logged in as {role}")
                 st.success(f"Welcome back, {user['name']}!")
-                st.rerun()
             else:
                 st.error("❌ Invalid credentials. Please check your email, password, and role selection.")
         
         st.markdown('</div>', unsafe_allow_html=True)
     
 def validate_user_access():
-    """Validate that the current user has proper access to their role"""
-    if not st.session_state.authenticated:
-        return False
-    
-    current_user = st.session_state.current_user
-    current_role = st.session_state.current_role
-    
-    # Check if current_user exists
-    if current_user is None or current_role is None:
-        return False
-    
-    # Check if user exists in registered users with matching role
-    for user in st.session_state.registered_users:
-        if user["email"] == current_user["email"] and user["role"] == current_role:
-            if user["status"] == "Active":
-                return True
-    
-    # If not found, check demo accounts
-    for account_role, accounts in DEMO_ACCOUNTS.items():
-        if account_role == current_role:
-            for account in accounts:
-                if account["email"] == current_user["email"] and account["password"] == current_user["password"]:
-                    return True
-    
-    return False
-
-    
-def enforce_auto_cancels():
-    """Auto-cancel unpaid bookings after 2 hours"""
+    """Simplified user access validation - ONLY checks essential conditions"""
     try:
-        # Check if invoices and bookings exist in session state
-        if 'invoices' not in st.session_state or 'bookings' not in st.session_state:
-            return
+        # Basic checks first
+        if not st.session_state.get('authenticated', False):
+            return False
             
-        current_time = datetime.now()
-        for inv in st.session_state.invoices:
-            if inv["status"] == "Pending":
-                due_date = datetime.strptime(inv["due_date"], "%Y-%m-%d %H:%M:%S")
-                if current_time > due_date:
-                    # Cancel the invoice
-                    inv["status"] = "Cancelled"
-                    # Find and cancel the corresponding booking
-                    for booking in st.session_state.bookings:
-                        if booking["id"] == inv["booking_id"]:
-                            booking["status"] = "Cancelled"
-                            booking["cancellation_status"] = "Auto-cancelled (Payment not received)"
-                            add_notification(f"Booking #{booking['id']} auto-cancelled due to non-payment", "cancellation")
-                            break
+        if st.session_state.current_user is None or st.session_state.current_role is None:
+            return False
+            
+        # For demo accounts, just check if the role exists in DEMO_ACCOUNTS
+        current_email = st.session_state.current_user.get('email', '')
+        current_role = st.session_state.current_role
+        
+        # Check if this is a valid role
+        if current_role not in DEMO_ACCOUNTS:
+            return False
+            
+        # Check if email exists in demo accounts for this role
+        for account in DEMO_ACCOUNTS[current_role]:
+            if account["email"] == current_email:
+                return True
+                
+        # Also check registered users
+        for user in st.session_state.registered_users:
+            if user["email"] == current_email and user["role"] == current_role:
+                return user.get("status", "Active") == "Active"
+                
+        return False
+        
     except Exception as e:
-        # Silently handle errors during auto-cancellation
-        pass
-    
+        print(f"Validation error: {e}")
+        return False
+
 # Main application
 def main():
-    # Initialize session data
+    # Initialize session data first
     init_session_data()
     
     # Check session timeout
     check_session_timeout()
     
-    if st.session_state.get('debug_mode', False):
-        st.sidebar.write("🔍 Debug Info:")
-        st.sidebar.write(f"Authenticated: {st.session_state.get('authenticated', 'Not set')}")
-        st.sidebar.write(f"Current User: {st.session_state.get('current_user', 'Not set')}")
-        st.sidebar.write(f"Current Role: {st.session_state.get('current_role', 'Not set')}")
-   
     # Show login page if not authenticated
     if not st.session_state.authenticated:
         show_login_page()
     else:
-        # Validate user access on every page load
+        # Simple validation - don't auto-logout
         if not validate_user_access():
-            st.error("⚠️ Access validation failed. Please login again.")
-            st.session_state.authenticated = False
-            st.session_state.current_user = None
-            st.session_state.current_role = None
-            st.rerun()
+            st.warning("⚠️ Session validation issue. Some features may be limited.")
+        else:
+            # User is properly authenticated
+            enforce_auto_cancels()
+            show_main_application()
         
-        # Additional safety check - ensure current_user exists
-        if st.session_state.current_user is None:
-            st.error("Session error: User data missing. Please login again.")
-            st.session_state.authenticated = False
-            st.rerun()
-        
-        # Move enforce_auto_cancels here so it only runs when user is authenticated
-        enforce_auto_cancels()
-        show_main_application()
 
 def show_login_page():
     # Elegant cover section
@@ -956,7 +957,6 @@ def show_login_form():
                 add_notification(f"User {user['name']} logged in as {role}", "success")
                 log_activity(user['name'], "User Login", f"Logged in as {role}")
                 st.success(f"Welcome back, {user['name']}!")
-                st.rerun()
             else:
                 st.error("❌ Invalid credentials. Please check your email, password, and role selection.")
         
@@ -1178,7 +1178,6 @@ def show_main_application():
         if st.session_state.current_user is None:
             st.error("User session error. Please login again.")
             st.session_state.authenticated = False
-            st.rerun()
         
         st.markdown(f"""
         <div class="sidebar-header">
@@ -1199,14 +1198,12 @@ def show_main_application():
                 if st.button("Mark All as Read", use_container_width=True):
                     for notification in st.session_state.notifications:
                         notification['read'] = True
-                    st.rerun()
         
         # Logout button
         if st.button("🚪 Logout", use_container_width=True):
             st.session_state.authenticated = False
             st.session_state.current_user = None
             st.session_state.current_role = None
-            st.rerun()
     
     # Main application based on role
     if st.session_state.current_role == "Guest":
@@ -1232,9 +1229,9 @@ def show_main_application():
 def show_guest_portal():
     st.markdown('<div class="main-header">👤 Guest Portal - Grand Stay Hotel</div>', unsafe_allow_html=True)
     
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([  
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([  
         "🏠 Book Room", "📋 My Bookings", "🛎️ Service Requests", 
-        "⭐ Leave Review", "📝 Recent Reviews", "👤 My Profile", "✏️ Modify Booking", "🔔 Notifications"  
+        "⭐ Leave Review", "📝 Recent Reviews", "👤 My Profile", "🔔 Notifications"  
     ])
     
     with tab1:
@@ -1250,8 +1247,6 @@ def show_guest_portal():
     with tab6:
         show_guest_profile_management()
     with tab7:  
-        show_booking_modification()
-    with tab8:  
         show_guest_notifications()
 
 def show_guest_booking():
@@ -1409,85 +1404,6 @@ def show_guest_booking():
         </div>
         """, unsafe_allow_html=True)
         
-
-def show_booking_modification():
-    st.markdown('<div class="sub-header">✏️ Modify Booking</div>', unsafe_allow_html=True)
-    
-    # Get guest's confirmed bookings - FIXED: Include bookings with room numbers
-    guest_bookings = [
-        b for b in st.session_state.bookings 
-        if b["guest_email"] == st.session_state.current_user['email'] 
-        and b["status"] in ["Confirmed", "Pending"]
-        and datetime.strptime(b["check_in"], "%Y-%m-%d") > datetime.now()
-    ]
-    
-    if not guest_bookings:
-        st.info("No modifiable bookings found.")
-        return
-    
-    selected_booking_id = st.selectbox(
-        "Select Booking to Modify",
-        [f"{b['id']} - {b['room_type']} ({b['check_in']} to {b['check_out']})" for b in guest_bookings]
-    )
-    
-    if selected_booking_id:
-        booking_id = selected_booking_id.split(" - ")[0]
-        booking = next(b for b in guest_bookings if b['id'] == booking_id)
-        
-        st.markdown("#### Current Booking Details")
-        st.write(f"**Booking ID:** {booking['id']}")
-        st.write(f"**Room Type:** {booking['room_type']}")
-        st.write(f"**Current Dates:** {booking['check_in']} to {booking['check_out']}")
-        st.write(f"**Room Number:** {booking.get('room_number', 'Will be assigned after payment')}")
-        st.write(f"**Special Requests:** {booking.get('special_requests', 'None')}")
-        
-        st.markdown("#### Modify Booking")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            new_check_in = st.date_input("New Check-in Date", 
-                                       value=datetime.strptime(booking['check_in'], "%Y-%m-%d"))
-            # FIXED: Use only 4 room types
-            new_room_type = st.selectbox("New Room Type", ["Single", "Double", "Suite", "Deluxe"],
-                                       index=["Single", "Double", "Suite", "Deluxe"].index(booking['room_type']))
-        
-        with col2:
-            new_check_out = st.date_input("New Check-out Date", 
-                                        value=datetime.strptime(booking['check_out'], "%Y-%m-%d"))
-            new_special_requests = st.text_area("New Special Requests", value=booking.get('special_requests', ''))
-        
-        # Price recalculation - FIXED: Use only 4 room types
-        room_prices = {"Single": 150, "Double": 200, "Suite": 350, "Deluxe": 500}
-        base_price = room_prices[new_room_type]
-        nights = max(1, (new_check_out - new_check_in).days)
-        new_total_price = base_price * nights
-        
-        st.markdown(f"**New Total Price:** ${new_total_price}")
-        st.markdown(f"**Price Difference:** ${new_total_price - booking['amount']}")
-        
-        if st.button("📝 Submit Modification Request", use_container_width=True):
-            # Create modification request
-            modification_request = {
-                "booking_id": booking_id,
-                "guest": booking['guest'],
-                "original_room_type": booking['room_type'],
-                "new_room_type": new_room_type,
-                "original_dates": f"{booking['check_in']} to {booking['check_out']}",
-                "new_dates": f"{new_check_in.strftime('%Y-%m-%d')} to {new_check_out.strftime('%Y-%m-%d')}",
-                "original_amount": booking['amount'],
-                "new_amount": new_total_price,
-                "status": "Pending",
-                "request_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "special_requests": new_special_requests
-            }
-            
-            # Add to a new session state list for modification requests
-            if 'modification_requests' not in st.session_state:
-                st.session_state.modification_requests = []
-            st.session_state.modification_requests.append(modification_request)
-            
-            add_notification(f"Modification request for booking #{booking_id}", "modification", ["Front Desk Officer"])
-            st.success("Modification request submitted! Front desk will contact you to confirm changes.")
         
 def show_guest_bookings():
     st.markdown('<div class="sub-header">📋 My Bookings</div>', unsafe_allow_html=True)
@@ -1553,7 +1469,6 @@ def show_guest_bookings():
                         # Notify billing officer
                         add_notification(f"Cancellation requested for booking #{booking['id']}", "cancellation", ["Billing Officer"])
                         st.success("Cancellation request submitted! Our billing team will process your request.")
-                        st.rerun()
                 st.markdown("---")
     
     # Completed bookings (historical records)
@@ -1575,7 +1490,7 @@ def show_guest_service_requests():
     st.markdown('<div class="sub-header">🛎️ Service Requests</div>', unsafe_allow_html=True)
     
     service_type = st.selectbox("Service Type", 
-                               ["Housekeeping", "Maintenance", "Event & Concierge", "Meeting"])
+                               ["Housekeeping", "Maintenance", "Event & Concierge", "Catering","Meeting"])
     
     col1, col2 = st.columns(2)
     with col1:
@@ -1607,9 +1522,9 @@ def show_guest_service_requests():
             add_notification(f"New housekeeping request from Room {room_number}", "service", ["Housekeeping Staff"])
         elif service_type == "Maintenance":
             add_notification(f"New maintenance request from Room {room_number}", "service", ["Maintenance Staff"])
-        elif service_type == "Room Service":
+        elif service_type == "Catering":
             add_notification(f"New room service request from Room {room_number}", "service", ["Catering Staff"])
-        elif service_type in ["Concierge", "Transportation"]:
+        elif service_type in ["Event & Concierge"]:
             add_notification(f"New {service_type} request from Room {room_number}", "service", ["Event & Concierge Staff"])
         else:
             add_notification(f"New {service_type} request from Room {room_number}", "service", ["Front Desk Officer"])
@@ -2266,7 +2181,7 @@ def show_pending_invoices():
         
         add_notification(f"Invoice {invoice['id']} marked as paid", "payment")
         st.success(f"Invoice {invoice['id']} marked as paid!")
-        st.rerun()
+        
         with col3:
             guest_email = None
             for booking in st.session_state.bookings:
@@ -2298,7 +2213,6 @@ def show_pending_invoices():
                 if st.button("🗑️ Remove", key=f"remove_{invoice['id']}"):
                     invoice["status"] = "Cancelled"
                     st.success(f"Invoice {invoice['id']} removed (booking cancelled)!")
-                    st.rerun()
 
 def show_payment_processing():
     st.markdown('<div class="sub-header">💰 Payment Processing</div>', unsafe_allow_html=True)
@@ -2404,7 +2318,7 @@ def show_cancellation_refunds():
                     
                     add_notification(f"Refund processed for booking #{request['booking_id']} - ${net_refund:.2f}", "refund")
                     st.success(f"Refund of ${net_refund:.2f} processed successfully!")
-                    st.rerun()
+                    
 
             st.markdown("---")
 
@@ -2466,7 +2380,7 @@ def show_vendor_payments():
                                 f"Paid ${net_payment:,.2f} to {vendor['name']} for {current_month}")
                     add_notification(f"Payment processed for {vendor['name']} - ${net_payment:,.2f}", "vendor_payment")
                     st.success(f"Payment of ${net_payment:,.2f} processed for {vendor['name']}!")
-                    st.rerun()
+                    
         
         with col3:
             # Show payment status
@@ -2564,46 +2478,6 @@ def show_manager_portal():
         show_calendar()
     with tab11:
         show_system_logs()
-
-def show_system_logs():
-    st.markdown('<div class="sub-header">📋 System Activity Logs</div>', unsafe_allow_html=True)
-    
-    if not st.session_state.system_logs:
-        st.info("No system logs available.")
-        return
-    
-    # Filter options
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        log_level = st.selectbox("Filter by Level", ["ALL", "INFO", "WARNING", "ERROR"])
-    with col2:
-        search_user = st.text_input("Search by User")
-    with col3:
-        date_filter = st.date_input("Filter by Date")
-    
-    # Display logs
-    filtered_logs = st.session_state.system_logs[::-1]  # Show latest first
-    
-    if log_level != "ALL":
-        filtered_logs = [log for log in filtered_logs if log["level"] == log_level]
-    
-    if search_user:
-        filtered_logs = [log for log in filtered_logs if search_user.lower() in log["user"].lower()]
-    
-    for log in filtered_logs[:50]:  # Show last 50 logs
-        level_color = {
-            "INFO": "card",
-            "WARNING": "warning-card", 
-            "ERROR": "critical-card"
-        }.get(log["level"], "card")
-        
-        st.markdown(f"""
-        <div class="card {level_color}">
-            <p><strong>{log['timestamp']} | {log['level']} | {log['user']}</strong></p>
-            <p><strong>Action:</strong> {log['action']}</p>
-            <p><strong>Details:</strong> {log['details']}</p>
-        </div>
-        """, unsafe_allow_html=True)
 
 def show_staff_management():
     st.markdown('<div class="sub-header">👥 Staff Management</div>', unsafe_allow_html=True)
@@ -2846,7 +2720,7 @@ def show_current_vendor_balances():
                     
                     add_notification(f"Payment processed for {vendor['name']} - ${net_payment:,.2f}", "vendor_payment")
                     st.success(f"Payment of ${net_payment:,.2f} processed for {vendor['name']}!")
-                    st.rerun()
+                    
             st.markdown("---")
 
 def show_vendor_payment_history_manager():
@@ -2928,6 +2802,14 @@ def show_front_desk_portal():
 def show_service_requests_task_assignment():
     st.markdown('<div class="sub-header">📋 Service Requests & Task Assignment</div>', unsafe_allow_html=True)
     
+    # Initialize service_requests if it doesn't exist
+    if 'service_requests' not in st.session_state:
+        st.session_state.service_requests = []
+    
+    # Initialize tasks if it doesn't exist  
+    if 'tasks' not in st.session_state:
+        st.session_state.tasks = []
+    
     # Show pending service requests
     pending_requests = [req for req in st.session_state.service_requests if req["status"] == "Pending"]
     
@@ -2947,77 +2829,197 @@ def show_service_requests_task_assignment():
                 "Low": "card"
             }.get(req["urgency"], "card")
             
-            st.markdown(f"""
+            # Enhanced card with full details
+            card_content = f"""
             <div class="card {urgency_color}">
                 <h4>Request #{req['id']} - {req['type']}</h4>
                 <p><strong>Guest:</strong> {req['guest']}</p>
                 <p><strong>Room:</strong> {req['room']}</p>
                 <p><strong>Urgency:</strong> {req['urgency']}</p>
                 <p><strong>Details:</strong> {req['details']}</p>
-                <p><strong>Requested:</strong> {req['timestamp']}</p>
-            </div>
-            """, unsafe_allow_html=True)
+            """
+            
+            # Show booking reference if available
+            if req.get('booking_id'):
+                card_content += f"""<p><strong>Booking Reference:</strong> {req['booking_id']}</p>"""
+            
+            # Show creator if available
+            if req.get('created_by'):
+                card_content += f"""<p><strong>Created by:</strong> {req['created_by']}</p>"""
+            
+            # Show full special requests if available from booking
+            if req.get('type') == 'Special Request' and req.get('booking_id'):
+                # Find the booking to get full special requests
+                booking = next((b for b in st.session_state.bookings if b['id'] == req['booking_id']), None)
+                if booking and booking.get('special_requests'):
+                    special_requests_text = booking['special_requests']
+        
+        # Remove common HTML tags if they exist
+                    special_requests_text = special_requests_text.replace('</div>', '').replace('<div>', '')
+                    special_requests_text = special_requests_text.replace('</p>', '').replace('<p>', '')
+                    special_requests_text = special_requests_text.replace('<strong>', '').replace('</strong>', '')
+                    special_requests_text = special_requests_text.replace('<br>', ' ')
+        
+        # Clean up any extra whitespace
+                    special_requests_text = ' '.join(special_requests_text.split())
+        
+                    card_content += f"""
+                    <div style="background: #f8f9fa; padding: 10px; border-radius: 5px; margin: 10px 0;">
+                        <strong>📝 Full Special Requests from Booking:</strong><br>
+                        {special_requests_text}
+                    </div>
+                    """
+            
+            card_content += f"""<p><strong>Requested:</strong> {req['timestamp']}</p></div>"""
+            
+            st.markdown(card_content, unsafe_allow_html=True)
         
         with col2:
             st.markdown("#### Assign Task")
             
-            # Special handling for Meeting requests
-            if req["type"] == "Meeting":
-                st.markdown("**Meeting Request - Additional Details Required**")
-                meeting_date = st.date_input("Meeting Date", key=f"date_{req['id']}")
-                meeting_time = st.time_input("Meeting Time", key=f"time_{req['id']}")
-                meeting_venue = st.text_input("Venue", key=f"venue_{req['id']}")
-                meeting_remarks = st.text_area("Special Remarks", key=f"remarks_{req['id']}")
+            # Department mapping - use the same names that staff portals expect
+            department_options = {
+                "Housekeeping": "Housekeeping Staff",
+                "Maintenance": "Maintenance Staff", 
+                "Catering": "Catering Staff",
+                "Event & Concierge": "Event & Concierge Staff"
+            }
             
-            department = st.selectbox(
-                "Assign to Department",
-                ["Housekeeping Staff", "Maintenance Staff", "Catering Staff", "Event & Concierge Staff"],
+            assigned_departments = st.multiselect(
+                "Assign to Department(s)",
+                list(department_options.keys()),  # Use the short names that staff portals expect
+                default=[],
                 key=f"dept_{req['id']}"
             )
             
-            if st.button(f"✅ Assign Task", key=f"assign_{req['id']}"):
-                # Create task
-                task_id = f"TK{len(st.session_state.tasks) + 1:03d}"
-                new_task = {
-                    "id": task_id,
-                    "type": req["type"],
-                    "room": req["room"],
-                    "assigned_to": department,
-                    "status": "Pending",
-                    "description": f"{req['type']} for {req['guest']}: {req['details']}",
-                    "request_id": req["id"],
-                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            # Show meeting details section ONLY if Event & Concierge is selected AND it's a meeting/special request
+            show_meeting_section = "Event & Concierge" in assigned_departments and req["type"] in ["Meeting", "Special Request"]
+            
+            # Initialize meeting variables with default values
+            meeting_details = {}
+            catering_required = False  # Initialize with default value
+            av_equipment = False  # Initialize with default value
+            
+            if show_meeting_section:
+                st.markdown("---")
+                st.markdown("**🎯 Meeting/Event Details**")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    meeting_date = st.date_input("Meeting Date", key=f"date_{req['id']}")
+                    meeting_time = st.time_input("Meeting Time", key=f"time_{req['id']}")
+                with col2:
+                    meeting_venue = st.text_input("Venue/Location", key=f"venue_{req['id']}")
+                    expected_attendees = st.number_input("Expected Attendees", min_value=1, value=10, key=f"attendees_{req['id']}")
+                
+                meeting_remarks = st.text_area("Special Requirements/Remarks", 
+                                             value=req.get('details', ''),
+                                             key=f"remarks_{req['id']}")
+                
+                # Additional meeting options
+                col1, col2 = st.columns(2)
+                with col1:
+                    meeting_type = st.selectbox(
+                        "Meeting Type",
+                        ["Business Meeting", "Conference", "Birthday Party", "Wedding", "Annual Dinner", "Other Event"],
+                        key=f"meeting_type_{req['id']}"
+                    )
+                with col2:
+                    catering_required = st.checkbox("Catering Required", key=f"catering_{req['id']}")
+                    av_equipment = st.checkbox("AV Equipment Required", key=f"av_{req['id']}")
+                
+                meeting_details = {
+                    "date": meeting_date.strftime("%Y-%m-%d"),
+                    "time": meeting_time.strftime("%H:%M"),
+                    "venue": meeting_venue,
+                    "attendees": expected_attendees,
+                    "remarks": meeting_remarks,
+                    "type": meeting_type,
+                    "catering_required": catering_required,
+                    "av_equipment": av_equipment
                 }
-                
-                # Add meeting details if it's a meeting
-                if req["type"] == "Meeting":
-                    new_task["meeting_details"] = {
-                        "date": meeting_date.strftime("%Y-%m-%d"),
-                        "time": meeting_time.strftime("%H:%M"),
-                        "venue": meeting_venue,
-                        "remarks": meeting_remarks
-                    }
-                    # Also add to meetings calendar
-                    if 'meetings' not in st.session_state:
-                        st.session_state.meetings = []
-                    st.session_state.meetings.append({
-                        "title": f"Meeting - {req['guest']}",
-                        "date": meeting_date.strftime("%Y-%m-%d"),
-                        "time": meeting_time.strftime("%H:%M"),
-                        "venue": meeting_venue,
-                        "department": department,
-                        "remarks": meeting_remarks,
-                        "guest": req['guest'],
-                        "room": req['room']
-                    })
-                
-                st.session_state.tasks.append(new_task)
-                req["status"] = "Assigned"
-                
-                # Send notification
-                add_notification(f"Task assigned to {department}: {req['type']} for Room {req['room']}", "task_assigned", [department])
-                st.success(f"✅ Task assigned to {department}! Notification sent.")
-                st.rerun()
+            
+            # Assign Task button
+            if st.button(f"✅ Assign Task", key=f"assign_{req['id']}"):
+                if not assigned_departments:
+                    st.error("Please select at least one department!")
+                else:
+                    # Create tasks for each selected department
+                    tasks_created = []
+                    for department_short in assigned_departments:
+                        department_display = department_options[department_short]
+                        task_id = f"TK{len(st.session_state.tasks) + 1:03d}"
+                        
+                        new_task = {
+                            "id": task_id,
+                            "type": req["type"],
+                            "room": req["room"],
+                            "assigned_to": department_short,  # Use short name that staff portals expect
+                            "assigned_to_display": department_display,  # Keep display name for reference
+                            "status": "Pending",
+                            "description": f"{req['type']} for {req['guest']}: {req['details']}",
+                            "request_id": req["id"],
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "departments_involved": assigned_departments,
+                            "guest": req['guest']  # Add guest name for staff reference
+                        }
+                        
+                        # Add meeting details if it's a meeting/event and Event & Concierge is involved
+                        if show_meeting_section and department_short == "Event & Concierge":
+                            new_task["meeting_details"] = meeting_details
+                            
+                            # Also add to meetings calendar
+                            if 'meetings' not in st.session_state:
+                                st.session_state.meetings = []
+                            st.session_state.meetings.append({
+                                "title": f"{meeting_type} - {req['guest']}",
+                                "date": meeting_details["date"],
+                                "time": meeting_details["time"],
+                                "venue": meeting_details["venue"],
+                                "department": "Event & Concierge Staff",
+                                "remarks": meeting_details["remarks"],
+                                "guest": req['guest'],
+                                "room": req['room'],
+                                "attendees": meeting_details["attendees"],
+                                "type": meeting_type
+                            })
+                        
+                        # Add catering task if needed - ONLY if catering_required is defined (in meeting section)
+                        if show_meeting_section and catering_required and department_short == "Catering":
+                            catering_task_id = f"TK{len(st.session_state.tasks) + 2:03d}"
+                            catering_task = {
+                                "id": catering_task_id,
+                                "type": "Catering Service",
+                                "room": req["room"],
+                                "assigned_to": "Catering",  # Use short name
+                                "assigned_to_display": "Catering Staff",
+                                "status": "Pending",
+                                "description": f"Catering for {meeting_type}: {meeting_details['remarks']}",
+                                "request_id": req["id"],
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "meeting_details": meeting_details,
+                                "guest": req['guest']
+                            }
+                            st.session_state.tasks.append(catering_task)
+                            tasks_created.append(catering_task_id)
+                        
+                        st.session_state.tasks.append(new_task)
+                        tasks_created.append(task_id)
+                    
+                    # Update request status
+                    req["status"] = "Assigned"
+                    req["assigned_departments"] = assigned_departments
+                    req["tasks_created"] = tasks_created
+                    
+                    # Send notifications to all assigned departments
+                    for department_short in assigned_departments:
+                        add_notification(
+                            f"New task assigned: {req['type']} for {req['guest']} in Room {req['room']}", 
+                            "task_assigned", 
+                            [department_options[department_short]]  # Use display name for notification targeting
+                        )
+                    
+                    st.success(f"✅ Task assigned to {', '.join(assigned_departments)}! {len(tasks_created)} task(s) created.")
         
         st.markdown("---")
             
@@ -3096,98 +3098,243 @@ def show_checkin_checkout():
     
     with tab1:
         st.markdown("#### Guest Check-In")
-        col1, col2 = st.columns(2)
-        with col1:
-            booking_ref = st.text_input("Booking Reference")
-            guest_name = st.text_input("Guest Name")
-        with col2:
-            available_rooms = [r["number"] for r in st.session_state.rooms if r["status"] == "vacant"]
-            assigned_room = st.selectbox("Assign Room", available_rooms)
-            payment_method = st.selectbox("Payment Method", ["Credit Card", "Debit Card", "Online Banking", "E-Wallet", "Cash"])
         
-        # THIS IS WHERE THE CHECK-IN CODE GOES:
-        if st.button("✅ Complete Check-In", use_container_width=True):
-            # Validate inputs
-            if not booking_ref or not guest_name:
-                st.error("Please enter booking reference and guest name")
-                return
+        # Get pending bookings for check-in
+        pending_bookings = [
+            b for b in st.session_state.bookings 
+            if b["status"] == "Confirmed" 
+            and b["payment_status"] == "Paid"
+            and datetime.strptime(b["check_in"], "%Y-%m-%d").date() <= datetime.now().date()
+        ]
+        
+        if not pending_bookings:
+            st.info("No pending check-ins available.")
+        else:
+            col1, col2 = st.columns(2)
+            with col1:
+                # Select booking for check-in
+                booking_options = [f"{b['id']} - {b['guest']} ({b['room_type']})" for b in pending_bookings]
+                selected_booking = st.selectbox("Select Booking for Check-In", booking_options)
+                booking_id = selected_booking.split(" - ")[0]
+                
+                # Find the selected booking
+                booking = next(b for b in pending_bookings if b['id'] == booking_id)
+                
+                # Display booking details
+                st.markdown("**Booking Details:**")
+                st.write(f"Guest: {booking['guest']}")
+                st.write(f"Email: {booking['guest_email']}")
+                st.write(f"Room Type: {booking['room_type']}")
+                st.write(f"Check-in: {booking['check_in']}")
+                st.write(f"Check-out: {booking['check_out']}")
+                st.write(f"Amount Paid: ${booking['amount_paid']}")
+                
+                # Show existing special requests
+                if booking.get('special_requests'):
+                    st.markdown("**Existing Special Requests:**")
+                    st.info(booking['special_requests'])
             
-            # Update room status to occupied
-            for room in st.session_state.rooms:
-                if room["number"] == assigned_room:
-                    room["status"] = "occupied"  # This is correct
-                    room["guest"] = guest_name
-                    break
-            
-            # Update booking with room number
-            for booking in st.session_state.bookings:
-                if booking["id"] == booking_ref:
-                    booking["room_number"] = assigned_room
-                    break
-            
-            # Create task for housekeeping
-            task_id = f"TK{len(st.session_state.tasks) + 1:03d}"
-            new_task = {
-                "id": task_id,
-                "type": "Room Preparation",
-                "room": assigned_room,
-                "assigned_to": "Housekeeping",
-                "status": "Pending",
-                "description": f"Prepare room for {guest_name}",
-                "booking_id": booking_ref,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            st.session_state.tasks.append(new_task)
-            
-            # ADD LOG ENTRY FOR CHECK-IN:
-            log_activity(st.session_state.current_user['name'], "Guest Check-In", 
-                        f"Guest {guest_name} checked into Room {assigned_room} (Booking: {booking_ref})")
-            
-            add_notification(f"Guest {guest_name} checked into Room {assigned_room}", "checkin", ["Housekeeping Staff"])
-            st.success(f"Guest checked into Room {assigned_room} successfully!")
+            with col2:
+                st.markdown("**Room Assignment**")
+                
+                # Get available rooms (vacant + pending of the correct type)
+                available_rooms = [
+                    r for r in st.session_state.rooms 
+                    if r["type"] == booking["room_type"] 
+                    and r["status"] in ["vacant", "pending"]
+                ]
+                
+                if not available_rooms:
+                    st.error(f"No available {booking['room_type']} rooms for assignment!")
+                else:
+                    # Room selection with status info
+                    room_options = [
+                        f"{r['number']} - {r['type']} ({r['status'].title()})" 
+                        for r in available_rooms
+                    ]
+                    assigned_room = st.selectbox("Assign Room", room_options)
+                    room_number = assigned_room.split(" - ")[0]
+                    
+                    payment_method = st.selectbox("Payment Method", 
+                                                ["Credit Card", "Debit Card", "Online Banking", "E-Wallet", "Cash"])
+                    
+                    # Special Request Button - FIXED VERSION
+                    st.markdown("---")
+                    if st.button("🎯 Create Special Request", key=f"special_req_{booking_id}", use_container_width=True):
+                        try:
+                            # Automatically create a special request in service_requests
+                            request_id = f"SR{len(st.session_state.service_requests) + 1:03d}"
+                            new_request = {
+                                "id": request_id,
+                                "guest": booking['guest'],
+                                "room": room_number if room_number else "TBD",
+                                "type": "Special Request",
+                                "urgency": "Medium",
+                                "details": f"Special request from check-in for {booking['guest']}. Special requests: {booking.get('special_requests', 'No specific requests')}",
+                                "status": "Pending",
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "booking_id": booking_id,
+                                "created_by": st.session_state.current_user['name']
+                            }
+                            st.session_state.service_requests.append(new_request)
+                            
+                            st.success(f"✅ Special request created! Go to 'Service Requests & Task Assignment' tab to assign it.")
+                        except Exception as e:
+                            st.error(f"Error creating special request: {str(e)}")
+                    
+                    # Check-in button
+                    if st.button("✅ Complete Check-In", use_container_width=True):
+                        try:
+                            # Update room status to occupied
+                            for room in st.session_state.rooms:
+                                if room["number"] == room_number:
+                                    room["status"] = "occupied"
+                                    room["guest"] = booking['guest']
+                                    break
+                            
+                            # Update booking with room number and status
+                            for b in st.session_state.bookings:
+                                if b["id"] == booking_id:
+                                    b["room_number"] = room_number
+                                    b["checked_in"] = True
+                                    b["check_in_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    break
+                            
+                            # Create housekeeping task
+                            task_id = f"TK{len(st.session_state.tasks) + 1:03d}"
+                            new_task = {
+                                "id": task_id,
+                                "type": "Room Preparation",
+                                "room": room_number,
+                                "assigned_to": "Housekeeping",  # Use short name
+                                "assigned_to_display": "Housekeeping Staff",
+                                "status": "Pending",
+                                "description": f"Prepare room for {booking['guest']} - Check-in",
+                                "booking_id": booking_id,
+                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "guest": booking['guest']
+                            }
+                            st.session_state.tasks.append(new_task)
+                            
+                            # Send notification to guest
+                            guest_notification_msg = f"🎉 Check-in completed! Welcome to Grand Stay Hotel. Your room {room_number} is ready. We hope you enjoy your stay!"
+                            add_notification(
+                                guest_notification_msg,
+                                "checkin_success",
+                                target_roles=["Guest"],
+                                target_user=booking['guest_email']
+                            )
+                            
+                            # Log activity
+                            log_activity(
+                                st.session_state.current_user['name'], 
+                                "Guest Check-In", 
+                                f"Guest {booking['guest']} checked into Room {room_number} (Booking: {booking_id})"
+                            )
+                            
+                            # Send notifications to staff
+                            add_notification(
+                                f"Guest {booking['guest']} checked into Room {room_number}", 
+                                "checkin", 
+                                ["Housekeeping Staff", "Hotel Manager"]
+                            )
+                            
+                            st.success(f"✅ Check-in completed successfully! Room {room_number} assigned to {booking['guest']}")
+                        except Exception as e:
+                            st.error(f"Error during check-in: {str(e)}")
     
     with tab2:
         st.markdown("#### Guest Check-Out")
         occupied_rooms = [r for r in st.session_state.rooms if r["status"] == "occupied"]
-        checkout_room = st.selectbox("Select Room for Check-Out", [r["number"] for r in occupied_rooms])
         
-        if st.button("💰 Process Check-Out", use_container_width=True):
-            for room in st.session_state.rooms:
-                if room["number"] == checkout_room:
-                    guest_name = room["guest"]
-                    room["status"] = "cleaning"
-                    room["guest"] = ""
+        if not occupied_rooms:
+            st.info("No occupied rooms available for check-out.")
+        else:
+            checkout_room = st.selectbox("Select Room for Check-Out", 
+                                       [f"{r['number']} - {r['guest']}" for r in occupied_rooms])
+            room_number = checkout_room.split(" - ")[0]
+            
+            # Get guest details
+            room_details = next(r for r in occupied_rooms if r["number"] == room_number)
+            guest_name = room_details["guest"]
+            
+            # Find booking details
+            booking = next(
+                (b for b in st.session_state.bookings 
+                 if b.get("room_number") == room_number and b["status"] == "Confirmed"),
+                None
+            )
+            
+            if booking:
+                st.markdown("**Check-out Details:**")
+                st.write(f"Guest: {guest_name}")
+                st.write(f"Room: {room_number}")
+                st.write(f"Check-in: {booking['check_in']}")
+                st.write(f"Original Check-out: {booking['check_out']}")
+                
+                # Additional charges
+                st.markdown("**Additional Charges**")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    minibar_charges = st.number_input("Minibar Charges ($)", min_value=0, value=0, key="minibar")
+                with col2:
+                    damage_charges = st.number_input("Damage Charges ($)", min_value=0, value=0, key="damage")
+                with col3:
+                    other_charges = st.number_input("Other Charges ($)", min_value=0, value=0, key="other")
+                
+                total_additional = minibar_charges + damage_charges + other_charges
+                
+                if total_additional > 0:
+                    st.warning(f"Total Additional Charges: ${total_additional}")
+            
+            if st.button("💰 Process Check-Out", use_container_width=True):
+                for room in st.session_state.rooms:
+                    if room["number"] == room_number:
+                        room["status"] = "cleaning"
+                        room["guest"] = ""
+                        break
+                
+                # Update booking status to Completed
+                if booking:
+                    booking["status"] = "Completed"
+                    booking["checked_out"] = True
+                    booking["check_out_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    booking["additional_charges"] = total_additional
                     
-                    # Find and update booking status to Completed
-                    for booking in st.session_state.bookings:
-                        if booking.get("room_number") == checkout_room and booking["status"] == "Confirmed":
-                            booking["status"] = "Completed"
-                            # Move to completed bookings for historical records
-                            completed_booking = booking.copy()
-                            st.session_state.completed_bookings.append(completed_booking)
-                            # Remove from active bookings
-                            st.session_state.bookings = [b for b in st.session_state.bookings if b["id"] != booking["id"]]
-                            break
+                    # Move to completed bookings for historical records
+                    completed_booking = booking.copy()
+                    st.session_state.completed_bookings.append(completed_booking)
                     
-                    # Create cleaning task
-                    task_id = f"TK{len(st.session_state.tasks) + 1:03d}"
-                    new_task = {
-                        "id": task_id,
-                        "type": "Cleaning",
-                        "room": checkout_room,
-                        "assigned_to": "Housekeeping",
-                        "status": "Pending",
-                        "description": f"Clean room after {guest_name} check-out",
-                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                    st.session_state.tasks.append(new_task)
-                    
-                    add_notification(f"Room {checkout_room} ready for cleaning after check-out", "checkout", ["Housekeeping Staff"])
-                    add_notification(f"Guest {guest_name} has checked out from Room {checkout_room}", "checkout", ["Hotel Manager"])
-                    st.success("Check-out completed successfully! Room assigned for cleaning.")
-                    break
-
-# ... (rest of the code remains the same for other functions like show_request_queue, show_task_assignment, etc.)
+                    # Send thank you message to guest
+                    thank_you_msg = f"🙏 Thank you for staying at Grand Stay Hotel! We hope you enjoyed your stay in room {room_number}. We look forward to welcoming you back soon!"
+                    add_notification(
+                        thank_you_msg,
+                        "checkout_thankyou",
+                        target_roles=["Guest"],
+                        target_user=booking['guest_email']
+                    )
+                
+                # Create cleaning task
+                task_id = f"TK{len(st.session_state.tasks) + 1:03d}"
+                new_task = {
+                    "id": task_id,
+                    "type": "Cleaning",
+                    "room": room_number,
+                    "assigned_to": "Housekeeping Staff",
+                    "status": "Pending",
+                    "description": f"Clean room after {guest_name} check-out",
+                    "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                }
+                st.session_state.tasks.append(new_task)
+                
+                # Notifications
+                add_notification(f"Room {room_number} ready for cleaning after check-out", "checkout", ["Housekeeping Staff"])
+                add_notification(f"Guest {guest_name} has checked out from Room {room_number}", "checkout", ["Hotel Manager"])
+                
+                st.success("✅ Check-out completed successfully! Room assigned for cleaning.")
+                
+                if total_additional > 0:
+                    st.info(f"💳 Additional charges of ${total_additional} have been recorded and will be billed.")
 
 def show_approval_system():
     st.markdown('<div class="sub-header">📋 Approval System</div>', unsafe_allow_html=True)
@@ -3235,7 +3382,7 @@ def show_approval_system():
                         if user["email"] == vendor["email"]:
                             user["status"] = "Active"
                     add_notification(f"Vendor {vendor['name']} approved", "vendor_approval", ["Vendor"])
-                    st.rerun()
+                    
             with col3:
                 # FIXED: Use unique key with index and vendor name
                 if st.button("❌ Reject", key=f"reject_{idx}_{vendor['name']}"):
@@ -3244,7 +3391,7 @@ def show_approval_system():
                     for user in st.session_state.registered_users:
                         if user["email"] == vendor["email"]:
                             user["status"] = "Rejected"
-                    st.rerun()
+                    
 
 def show_manager_analytics():
     st.markdown('<div class="sub-header">📈 Performance Dashboard</div>', unsafe_allow_html=True)
@@ -3466,7 +3613,6 @@ def show_housekeeping_portal():
                     if task["status"] == "Pending":
                         if st.button("Start", key=f"start_{task['id']}"):
                             task["status"] = "In Progress"
-                            st.rerun()
                 with col3:
                     if task["status"] in ["Pending", "In Progress"]:
                         if st.button("Complete", key=f"complete_{task['id']}"):
@@ -3488,7 +3634,6 @@ def show_housekeeping_portal():
                             add_notification(f"Housekeeping task {task['id']} completed for Room {task['room']}", 
                                            "task_completed", ["Hotel Manager", "Front Desk Officer"])
                             st.success(f"Task {task['id']} completed!")
-                            st.rerun()
     
     with tab2:
         show_calendar("Housekeeping Staff")
@@ -3503,48 +3648,73 @@ def show_maintenance_portal():
     tab1, tab2, tab3 = st.tabs(["📋 Assigned Tasks", "📅 Calendar", "📊 Past Work"])
     
     with tab1:
-        maintenance_requests = [r for r in st.session_state.service_requests if r["type"] == "Maintenance" and r["status"] in ["Pending", "In Progress"]]
+        # Get maintenance tasks from BOTH service_requests AND tasks
+        maintenance_service_requests = [r for r in st.session_state.service_requests if r["type"] == "Maintenance" and r["status"] in ["Pending", "In Progress"]]
+        maintenance_tasks = [t for t in st.session_state.tasks if t["assigned_to"] == "Maintenance" and t["status"] in ["Pending", "In Progress"]]
         
-        if not maintenance_requests:
-            st.info("No maintenance requests.")
-            return
+        # Combine both lists
+        all_maintenance_work = maintenance_service_requests + maintenance_tasks
         
-        for request in maintenance_requests:
-            col1, col2, col3 = st.columns([3, 1, 1])
-            with col1:
-                urgency_color = {
-                    "Critical": "critical-card", 
-                    "High": "critical-card", 
-                    "Medium": "warning-card", 
-                    "Low": "card"
-                }.get(request["urgency"], "card")
+        if not all_maintenance_work:
+            st.info("No maintenance tasks assigned.")
+        else:
+            for work_item in all_maintenance_work:
+                col1, col2, col3 = st.columns([3, 1, 1])
+                with col1:
+                    # Determine if it's from service_requests or tasks
+                    if 'details' in work_item:  # It's from service_requests
+                        urgency_color = {
+                            "Critical": "critical-card", 
+                            "High": "critical-card", 
+                            "Medium": "warning-card", 
+                            "Low": "card"
+                        }.get(work_item["urgency"], "card")
+                        
+                        status_color = "warning-card" if work_item["status"] == "Pending" else "card"
+                        
+                        st.markdown(f"""
+                        <div class="card {urgency_color} {status_color}">
+                            <h4>Maintenance - Room {work_item['room']}</h4>
+                            <p>Issue: {work_item['details']}</p>
+                            <p>Guest: {work_item['guest']}</p>
+                            <p>Urgency: {work_item['urgency']}</p>
+                            <p>Status: <strong>{work_item['status']}</strong></p>
+                            <p><small>Type: Service Request</small></p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:  # It's from tasks
+                        status_color = "warning-card" if work_item["status"] == "Pending" else "card"
+                        
+                        st.markdown(f"""
+                        <div class="card {status_color}">
+                            <h4>{work_item['type']} - Room {work_item['room']}</h4>
+                            <p>Description: {work_item['description']}</p>
+                            <p>Guest: {work_item.get('guest', 'N/A')}</p>
+                            <p>Status: <strong>{work_item['status']}</strong></p>
+                            <p><small>Type: Assigned Task</small></p>
+                        </div>
+                        """, unsafe_allow_html=True)
                 
-                status_color = "warning-card" if request["status"] == "Pending" else "card"
-                
-                st.markdown(f"""
-                <div class="card {urgency_color} {status_color}">
-                    <h4>Maintenance - Room {request['room']}</h4>
-                    <p>Issue: {request['details']}</p>
-                    <p>Guest: {request['guest']}</p>
-                    <p>Urgency: {request['urgency']}</p>
-                    <p>Status: <strong>{request['status']}</strong></p>
-                </div>
-                """, unsafe_allow_html=True)
-            with col2:
-                if request["status"] == "Pending":
-                    if st.button("Start Work", key=f"start_{request['id']}"):
-                        request["status"] = "In Progress"
-                        st.rerun()
-            with col3:
-                if request["status"] in ["Pending", "In Progress"]:
-                    if st.button("Complete", key=f"complete_{request['id']}"):
-                        request["status"] = "Completed"
-                        request["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        # ADD LOG ENTRY HERE:
-                        log_activity(st.session_state.current_user['name'], "Task Completed", 
-                                    f"Maintenance Request {request['id']} completed - {request['details']}")
-                        add_notification(f"Maintenance completed for Room {request['room']}", "maintenance")
-                        st.rerun()
+                with col2:
+                    if work_item["status"] == "Pending":
+                        if st.button("Start Work", key=f"start_{work_item['id']}"):
+                            work_item["status"] = "In Progress"
+                            st.rerun()
+                            
+                with col3:
+                    if work_item["status"] in ["Pending", "In Progress"]:
+                        if st.button("Complete", key=f"complete_{work_item['id']}"):
+                            # Update the work item
+                            work_item["status"] = "Completed"
+                            work_item["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            work_item["completed_by"] = st.session_state.current_user['name']
+                            
+                            # ADD LOG ENTRY
+                            log_activity(st.session_state.current_user['name'], "Task Completed", 
+                                        f"Maintenance {work_item['id']} completed - Room {work_item.get('room', 'N/A')}")
+                            add_notification(f"Maintenance completed for Room {work_item.get('room', 'N/A')}", "maintenance")
+                            st.success(f"Maintenance task {work_item['id']} completed!")
+                            st.rerun()
     
     with tab2:
         show_calendar("Maintenance Staff")
@@ -3583,17 +3753,25 @@ def show_catering_portal():
                 if task["status"] == "Pending":
                     if st.button("Start", key=f"start_{task['id']}"):
                         task["status"] = "In Progress"
-                        st.rerun()
+                        
             with col3:
                 if task["status"] in ["Pending", "In Progress"]:
                     if st.button("Complete", key=f"complete_{task['id']}"):
+                        # Create a copy for historical record before modifying
+                        completed_task = task.copy()
+                        completed_task["status"] = "Completed"
+                        completed_task["completed_by"] = st.session_state.current_user['name']
+                        completed_task["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        # Update the original task
                         task["status"] = "Completed"
                         task["completed_by"] = st.session_state.current_user['name']
                         task["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
                         log_activity(st.session_state.current_user['name'], "Task Completed", 
                                     f"Catering Task {task['id']} completed - {task['description']}")
                         add_notification(f"Catering task {task['id']} completed", "task")
-                        st.rerun()
+                        st.success(f"Catering task {task['id']} completed!")
     
     with tab2:
         show_calendar("Catering Staff")
@@ -3640,17 +3818,25 @@ def show_event_concierge_portal():
                 if task["status"] == "Pending":
                     if st.button("Start", key=f"start_{task['id']}"):
                         task["status"] = "In Progress"
-                        st.rerun()
+                        
             with col3:
                 if task["status"] in ["Pending", "In Progress"]:
                     if st.button("Complete", key=f"complete_{task['id']}"):
+                        # Create a copy for historical record before modifying
+                        completed_task = task.copy()
+                        completed_task["status"] = "Completed"
+                        completed_task["completed_by"] = st.session_state.current_user['name']
+                        completed_task["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
+                        # Update the original task
                         task["status"] = "Completed"
                         task["completed_by"] = st.session_state.current_user['name']
                         task["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        
                         log_activity(st.session_state.current_user['name'], "Task Completed", 
                                     f"Event/Concierge Task {task['id']} completed - {task['description']}")
                         add_notification(f"Event/Concierge task {task['id']} completed", "task")
-                        st.rerun()
+                        st.success(f"Event/Concierge task {task['id']} completed!")
     
     with tab2:
         show_calendar("Event & Concierge Staff")
@@ -3707,4 +3893,5 @@ def to_date(s):
 # Run the application
 if __name__ == "__main__":
     main()
+
 
