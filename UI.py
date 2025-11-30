@@ -777,7 +777,6 @@ def show_past_work(role="General"):
         st.metric("All Time", len(completed_items))
 
 
-
 # Authentication system
 def authenticate_user(email, password, role):
     # Check demo accounts first
@@ -2527,29 +2526,45 @@ def show_vendor_management():
 def show_staff_performance():
     st.markdown('<div class="sub-header">📊 Staff Performance</div>', unsafe_allow_html=True)
     
-    # Calculate staff performance metrics
+    # Calculate staff performance metrics with PROPER ROLE MAPPING
     staff_roles = ["Housekeeping Staff", "Maintenance Staff", "Catering Staff", "Event & Concierge Staff"]
+    
+    # Role mapping for task assignment - USE THE SAME MAPPING AS OTHER FUNCTIONS
+    role_mapping = {
+        "Housekeeping Staff": "Housekeeping",
+        "Maintenance Staff": "Maintenance", 
+        "Catering Staff": "Catering",
+        "Event & Concierge Staff": "Event & Concierge"  # FIXED: Use "Event & Concierge" to match task assignment
+    }
     
     performance_data = []
     for role in staff_roles:
         staff_members = [u for u in st.session_state.registered_users if u["role"] == role and u["status"] == "Active"]
         
         for staff in staff_members:
-            # Count completed tasks
-            completed_tasks = [
-                t for t in st.session_state.tasks 
-                if t["assigned_to"] == role and t["status"] == "Completed"
-            ]
+            # Get the short role name for filtering tasks
+            short_role = role_mapping.get(role, role)
             
-            # Calculate average completion time (simulated)
-            avg_completion_time = "2.5 hours"  # This would require timestamp tracking
+            # Count completed tasks using the CORRECT role mapping
+            if role == "Maintenance Staff":
+                # For maintenance, check BOTH service_requests AND tasks
+                completed_service_requests = [r for r in st.session_state.service_requests if r.get("type") == "Maintenance" and r.get("status") == "Completed"]
+                completed_tasks = [t for t in st.session_state.tasks if t.get("assigned_to") == "Maintenance" and t.get("status") == "Completed"]
+                completed_count = len(completed_service_requests) + len(completed_tasks)
+            else:
+                # For other roles, use tasks with proper role mapping
+                completed_tasks = [t for t in st.session_state.tasks if t.get("assigned_to") == short_role and t.get("status") == "Completed"]
+                completed_count = len(completed_tasks)
+            
+            # Calculate performance score
+            performance_score = min(completed_count * 10, 100)
             
             performance_data.append({
                 "Name": staff["name"],
                 "Role": role,
-                "Completed Tasks": len(completed_tasks),
-                "Avg Completion Time": avg_completion_time,
-                "Performance Score": f"{(min(len(completed_tasks) * 10, 100))}%"
+                "Completed Tasks": completed_count,
+                "Avg Completion Time": "2.5 hours",  # This would require timestamp tracking
+                "Performance Score": f"{performance_score}%"
             })
     
     if performance_data:
@@ -2562,7 +2577,6 @@ def show_staff_performance():
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No staff performance data available.")
-
 
 def show_current_vendor_balances():
     st.markdown("#### Current Vendor Payables")
@@ -3645,43 +3659,39 @@ def show_catering_portal():
         
         if not catering_tasks:
             st.info("No catering tasks assigned.")
-            return
-        
-        for task in catering_tasks:
-            col1, col2, col3 = st.columns([3, 1, 1])
-            with col1:
-                status_color = "warning-card" if task["status"] == "Pending" else "card" if task["status"] == "In Progress" else "success-card"
-                st.markdown(f"""
-                <div class="card {status_color}">
-                    <h4>{task['type']} - Booking #{task.get('booking_id', 'N/A')}</h4>
-                    <p>{task['description']}</p>
-                    <p>Assigned: {task['timestamp']}</p>
-                    <p>Status: <strong>{task['status']}</strong></p>
-                </div>
-                """, unsafe_allow_html=True)
-            with col2:
-                if task["status"] == "Pending":
-                    if st.button("Start", key=f"start_{task['id']}"):
-                        task["status"] = "In Progress"
-                        
-            with col3:
-                if task["status"] in ["Pending", "In Progress"]:
-                    if st.button("Complete", key=f"complete_{task['id']}"):
-                        # Create a copy for historical record before modifying
-                        completed_task = task.copy()
-                        completed_task["status"] = "Completed"
-                        completed_task["completed_by"] = st.session_state.current_user['name']
-                        completed_task["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        
-                        # Update the original task
-                        task["status"] = "Completed"
-                        task["completed_by"] = st.session_state.current_user['name']
-                        task["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        
-                        log_activity(st.session_state.current_user['name'], "Task Completed", 
-                                    f"Catering Task {task['id']} completed - {task['description']}")
-                        add_notification(f"Catering task {task['id']} completed", "task")
-                        st.success(f"Catering task {task['id']} completed!")
+            # REMOVED: return statement here to allow other tabs to render
+        else:
+            for task in catering_tasks:
+                col1, col2, col3 = st.columns([3, 1, 1])
+                with col1:
+                    status_color = "warning-card" if task["status"] == "Pending" else "card" if task["status"] == "In Progress" else "success-card"
+                    st.markdown(f"""
+                    <div class="card {status_color}">
+                        <h4>{task['type']} - Booking #{task.get('booking_id', 'N/A')}</h4>
+                        <p>{task['description']}</p>
+                        <p>Assigned: {task['timestamp']}</p>
+                        <p>Status: <strong>{task['status']}</strong></p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col2:
+                    if task["status"] == "Pending":
+                        if st.button("Start", key=f"start_{task['id']}"):
+                            task["status"] = "In Progress"
+                            st.rerun()
+                            
+                with col3:
+                    if task["status"] in ["Pending", "In Progress"]:
+                        if st.button("Complete", key=f"complete_{task['id']}"):
+                            # Update the original task directly
+                            task["status"] = "Completed"
+                            task["completed_by"] = st.session_state.current_user['name']
+                            task["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            
+                            log_activity(st.session_state.current_user['name'], "Task Completed", 
+                                        f"Catering Task {task['id']} completed - {task['description']}")
+                            add_notification(f"Catering task {task['id']} completed", "task")
+                            st.success(f"Catering task {task['id']} completed!")
+                            st.rerun()
     
     with tab2:
         show_calendar("Catering Staff")
@@ -3702,51 +3712,46 @@ def show_event_concierge_portal():
         
         if not event_tasks:
             st.info("No event or concierge tasks assigned.")
-            return
-        
-        for task in event_tasks:
-            col1, col2, col3 = st.columns([3, 1, 1])
-            with col1:
-                status_color = "warning-card" if task["status"] == "Pending" else "card" if task["status"] == "In Progress" else "success-card"
-                
-                # Show meeting details if available
-                meeting_info = ""
-                if task.get("meeting_details"):
-                    md = task["meeting_details"]
-                    meeting_info = f"<p><strong>Meeting:</strong> {md.get('date', '')} at {md.get('time', '')} - {md.get('venue', '')}</p>"
-                
-                st.markdown(f"""
-                <div class="card {status_color}">
-                    <h4>{task['type']} - Booking #{task.get('booking_id', 'N/A')}</h4>
-                    <p>{task['description']}</p>
-                    {meeting_info}
-                    <p>Assigned: {task['timestamp']}</p>
-                    <p>Status: <strong>{task['status']}</strong></p>
-                </div>
-                """, unsafe_allow_html=True)
-            with col2:
-                if task["status"] == "Pending":
-                    if st.button("Start", key=f"start_{task['id']}"):
-                        task["status"] = "In Progress"
-                        
-            with col3:
-                if task["status"] in ["Pending", "In Progress"]:
-                    if st.button("Complete", key=f"complete_{task['id']}"):
-                        # Create a copy for historical record before modifying
-                        completed_task = task.copy()
-                        completed_task["status"] = "Completed"
-                        completed_task["completed_by"] = st.session_state.current_user['name']
-                        completed_task["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        
-                        # Update the original task
-                        task["status"] = "Completed"
-                        task["completed_by"] = st.session_state.current_user['name']
-                        task["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        
-                        log_activity(st.session_state.current_user['name'], "Task Completed", 
-                                    f"Event/Concierge Task {task['id']} completed - {task['description']}")
-                        add_notification(f"Event/Concierge task {task['id']} completed", "task")
-                        st.success(f"Event/Concierge task {task['id']} completed!")
+        else:
+            for task in event_tasks:
+                col1, col2, col3 = st.columns([3, 1, 1])
+                with col1:
+                    status_color = "warning-card" if task["status"] == "Pending" else "card" if task["status"] == "In Progress" else "success-card"
+                    
+                    # SIMPLIFIED: Just include meeting details as regular text
+                    meeting_text = ""
+                    if task.get("meeting_details"):
+                        md = task["meeting_details"]
+                        meeting_text = f"Date: {md.get('date', '')} | Time: {md.get('time', '')} | Venue: {md.get('venue', '')} | Attendees: {md.get('attendees', '')} | Remarks: {md.get('remarks', '')}"
+                    
+                    st.markdown(f"""
+                    <div class="card {status_color}">
+                        <h4>{task['type']} - {task.get('room', 'N/A')}</h4>
+                        <p>{task['description']}</p>
+                        <p>{meeting_text}</p>
+                        <p>Guest: {task.get('guest', 'N/A')}</p>
+                        <p>Assigned: {task['timestamp']}</p>
+                        <p>Status: <strong>{task['status']}</strong></p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                with col2:
+                    if task["status"] == "Pending":
+                        if st.button("Start", key=f"start_{task['id']}"):
+                            task["status"] = "In Progress"
+                            st.rerun()
+                            
+                with col3:
+                    if task["status"] in ["Pending", "In Progress"]:
+                        if st.button("Complete", key=f"complete_{task['id']}"):
+                            task["status"] = "Completed"
+                            task["completed_by"] = st.session_state.current_user['name']
+                            task["completed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            
+                            log_activity(st.session_state.current_user['name'], "Task Completed", 
+                                        f"Event/Concierge Task {task['id']} completed - {task['description']}")
+                            add_notification(f"Event/Concierge task {task['id']} completed", "task", ["Hotel Manager"])
+                            st.success(f"Event/Concierge task {task['id']} completed!")
+                            st.rerun()
     
     with tab2:
         show_calendar("Event & Concierge Staff")
