@@ -1978,7 +1978,6 @@ def show_vendor_report_generator(vendor_info):
     
     with col2:
         end_date = st.date_input("End Date", datetime.now())
-        format_type = st.selectbox("Download Format", ["CSV", "PDF"])
     
     if st.button("📥 Generate Report", use_container_width=True):
         # Filter vendor services for the date range
