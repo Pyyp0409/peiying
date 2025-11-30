@@ -1527,78 +1527,7 @@ def show_guest_service_requests():
         
         st.success("Service request submitted! Our staff will attend to it shortly.")
 
-def show_guest_profile_management():
-    st.markdown('<div class="sub-header">👤 Profile Management</div>', unsafe_allow_html=True)
-    
-    # Find current guest in registered users
-    current_email = st.session_state.current_user['email']
-    guest_profile = None
-    
-    for user in st.session_state.registered_users:
-        if user["email"] == current_email and user["role"] == "Guest":
-            guest_profile = user
-            break
-    
-    if not guest_profile:
-        st.error("Profile not found.")
-        return
-    
-    with st.form("profile_management_form"):
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            full_name = st.text_input("Full Name *", value=guest_profile.get("name", ""))
-            phone = st.text_input("Phone Number *", value=guest_profile.get("phone", ""))
-            id_type = st.selectbox("ID Type *", ["Passport", "Driver's License", "National ID"], 
-                                 index=["Passport", "Driver's License", "National ID"].index(guest_profile.get("id_type", "Passport")))
-        
-        with col2:
-            id_number = st.text_input("ID Number *", value=guest_profile.get("id_number", ""))
-            address = st.text_area("Home Address *", value=guest_profile.get("address", ""))
-            emergency_contact = st.text_input("Emergency Contact", value=guest_profile.get("emergency_contact", ""))
-            preferred_payment = st.selectbox("Preferred Payment Method", 
-                                           ["Credit Card", "Debit Card", "Online Banking", "E-Wallet", "Cash"],
-                                           index=["Credit Card", "Debit Card", "Online Banking", "E-Wallet", "Cash"].index(guest_profile.get("preferred_payment", "Credit Card")))
-        
-        # Password change section
-        st.markdown("#### Change Password")
-        col1, col2 = st.columns(2)
-        with col1:
-            new_password = st.text_input("New Password", type="password", placeholder="Leave blank to keep current")
-        with col2:
-            confirm_password = st.text_input("Confirm New Password", type="password")
-        
-        submitted = st.form_submit_button("💾 Update Profile")
-        
-        if submitted:
-            # Validation
-            if not all([full_name, phone, id_type, id_number, address]):
-                st.error("Please fill in all required fields (*)")
-            elif new_password and new_password != confirm_password:
-                st.error("New passwords do not match!")
-            elif new_password and len(new_password) < 8:
-                st.error("Password must be at least 8 characters long")
-            else:
-                # Update profile
-                guest_profile.update({
-                    "name": full_name,
-                    "phone": phone,
-                    "id_type": id_type,
-                    "id_number": id_number,
-                    "address": address,
-                    "emergency_contact": emergency_contact,
-                    "preferred_payment": preferred_payment
-                })
-                
-                # Update password if provided
-                if new_password:
-                    guest_profile["password"] = new_password
-                
-                # Update current user name in session
-                st.session_state.current_user['name'] = full_name
-                
-                st.success("✅ Profile updated successfully!")
-
+              
 
 def show_guest_profile_management():
     st.markdown('<div class="sub-header">👤 Profile Management</div>', unsafe_allow_html=True)
@@ -1633,13 +1562,6 @@ def show_guest_profile_management():
                                            ["Credit Card", "Debit Card", "Online Banking", "E-Wallet", "Cash"],
                                            index=["Credit Card", "Debit Card", "Online Banking", "E-Wallet", "Cash"].index(guest_profile.get("preferred_payment", "Credit Card")))
         
-        # Password change section
-        st.markdown("#### Change Password")
-        col1, col2 = st.columns(2)
-        with col1:
-            new_password = st.text_input("New Password", type="password", placeholder="Leave blank to keep current")
-        with col2:
-            confirm_password = st.text_input("Confirm New Password", type="password")
         
         submitted = st.form_submit_button("💾 Update Profile")
         
@@ -1647,10 +1569,6 @@ def show_guest_profile_management():
             # Validation
             if not all([full_name, phone, id_type, id_number, address]):
                 st.error("Please fill in all required fields (*)")
-            elif new_password and new_password != confirm_password:
-                st.error("New passwords do not match!")
-            elif new_password and len(new_password) < 8:
-                st.error("Password must be at least 8 characters long")
             else:
                 # Update profile
                 guest_profile.update({
@@ -1663,9 +1581,6 @@ def show_guest_profile_management():
                     "preferred_payment": preferred_payment
                 })
                 
-                # Update password if provided
-                if new_password:
-                    guest_profile["password"] = new_password
                 
                 # Update current user name in session
                 st.session_state.current_user['name'] = full_name
